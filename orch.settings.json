@@ -1,0 +1,19 @@
+{
+  "default_provider": "ollama",
+  "providers": {
+    "ollama": {
+      "base_url": "http://localhost:11434/v1",
+      "model": "qwen3.5:35b"
+    },
+    "vllm": {
+      "base_url": "http://localhost:8000/v1",
+      "model": "",
+      "api_key_env": "VLLM_API_KEY"
+    }
+  },
+  "approval_policy": "confirm_mutations",
+  "self_driving_mode": false,
+  "auto_translate": false,
+  "react_ralph_iter": 3,
+  "plan_ralph_iter": 3
+}
