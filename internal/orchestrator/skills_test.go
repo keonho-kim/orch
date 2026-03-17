@@ -1,0 +1,121 @@
+package orchestrator
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/config"
+	"github.com/keonho-kim/orch/internal/session"
+)
+
+func TestSelectedSkillNamesDeduplicateMentions(t *testing.T) {
+	t.Parallel()
+
+	names := selectedSkillNames("use $alpha and $beta then repeat $alpha")
+	if len(names) != 2 || names[0] != "alpha" || names[1] != "beta" {
+		t.Fatalf("unexpected selected skill names: %+v", names)
+	}
+}
+
+func TestResolveSelectedSkillsLoadsSkillContent(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	skillPath := filepath.Join(workspace, "bootstrap", "skills", "alpha", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
+		t.Fatalf("mkdir skill dir: %v", err)
+	}
+	if err := os.WriteFile(skillPath, []byte("skill alpha"), 0o644); err != nil {
+		t.Fatalf("write skill file: %v", err)
+	}
+
+	selected, err := resolveSelectedSkills(workspace, "please use $alpha")
+	if err != nil {
+		t.Fatalf("resolve selected skills: %v", err)
+	}
+	if len(selected) != 1 || selected[0].Name != "alpha" || selected[0].Content != "skill alpha" {
+		t.Fatalf("unexpected selected skills: %+v", selected)
+	}
+}
+
+func TestResolveSelectedSkillsRejectsUnknownSkill(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	_, err := resolveSelectedSkills(workspace, "please use $missing")
+	if err == nil || !strings.Contains(err.Error(), "$missing") {
+		t.Fatalf("expected unknown skill error, got %v", err)
+	}
+}
+
+func TestBuildIterationContextIncludesSelectedSkillsAndChatHistory(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	paths, err := config.ResolvePaths(repoRoot)
+	if err != nil {
+		t.Fatalf("resolve paths: %v", err)
+	}
+	manager := session.NewManager(paths.SessionsDir)
+	service := &Service{
+		ctx:      context.Background(),
+		paths:    paths,
+		sessions: session.NewService(manager, nil),
+	}
+
+	for relative, content := range map[string]string{
+		"PRODUCT.md":                            "product",
+		"AGENTS.md":                             "agents",
+		filepath.Join("bootstrap", "USER.md"):   "user",
+		filepath.Join("bootstrap", "SKILLS.md"): "skills index",
+	} {
+		path := filepath.Join(paths.TestWorkspace, relative)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", relative, err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", relative, err)
+		}
+	}
+
+	if err := manager.AppendChatHistory(session.ChatHistoryEntry{
+		CreatedAt: time.Now(),
+		SessionID: "S1",
+		RunID:     "R1",
+		Speaker:   session.ChatHistorySpeakerUser,
+		Summary:   "rolling summary",
+	}); err != nil {
+		t.Fatalf("append chat history: %v", err)
+	}
+
+	context, err := service.buildIterationContext(domain.RunRecord{
+		Mode:          domain.RunModeReact,
+		WorkspacePath: paths.TestWorkspace,
+		CurrentCwd:    paths.TestWorkspace,
+	}, []selectedSkill{{
+		Name:    "alpha",
+		Path:    "bootstrap/skills/alpha/SKILL.md",
+		Content: "skill alpha",
+	}}, "- @README.md -> [README.md](/tmp/ws/README.md) at /tmp/ws/README.md", domain.PlanCache{}, "")
+	if err != nil {
+		t.Fatalf("build iteration context: %v", err)
+	}
+
+	if !strings.Contains(context, "Selected skill content for this call:") {
+		t.Fatalf("expected selected skill content in context, got %q", context)
+	}
+	if !strings.Contains(context, ".orch/chatHistory.md:") {
+		t.Fatalf("expected chatHistory heading in context, got %q", context)
+	}
+	if !strings.Contains(context, "rolling summary") {
+		t.Fatalf("expected chatHistory content in context, got %q", context)
+	}
+	if !strings.Contains(context, "Resolved workspace references for this request:") {
+		t.Fatalf("expected resolved references in context, got %q", context)
+	}
+}

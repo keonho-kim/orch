@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"orch/domain"
+	"github.com/keonho-kim/orch/domain"
 )
 
 func (m Model) renderSettingsLines(width int) []string {

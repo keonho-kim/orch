@@ -6,7 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 
-	"orch/domain"
+	"github.com/keonho-kim/orch/domain"
 )
 
 type settingsField int
@@ -27,6 +27,7 @@ const (
 	fieldVLLMAPIKeyEnv
 	fieldReactRalphIter
 	fieldPlanRalphIter
+	fieldCompactThreshold
 )
 
 const (
@@ -105,6 +106,7 @@ var settingsFieldOrder = []settingsField{
 	fieldVLLMAPIKeyEnv,
 	fieldReactRalphIter,
 	fieldPlanRalphIter,
+	fieldCompactThreshold,
 }
 
 var settingsFieldGroups = []settingsFieldGroup{
@@ -120,16 +122,17 @@ var settingsFieldGroupTitles = map[settingsFieldGroup]string{
 }
 
 var settingsFieldSpecs = map[settingsField]settingsFieldSpec{
-	fieldProvider:       {label: "Provider", kind: settingsFieldKindProvider, group: settingsFieldGroupProvider, visible: alwaysVisibleSettingsField},
-	fieldSelfDriving:    {label: "Self-Driving Mode", kind: settingsFieldKindToggle, group: settingsFieldGroupGeneral, visible: alwaysVisibleSettingsField},
-	fieldAutoTranslate:  {label: "Auto Translate", kind: settingsFieldKindToggle, group: settingsFieldGroupGeneral, visible: alwaysVisibleSettingsField},
-	fieldOllamaBaseURL:  {label: "Ollama Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider, visible: providerSettingsField(domain.ProviderOllama)},
-	fieldOllamaModel:    {label: "Ollama Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider, visible: providerSettingsField(domain.ProviderOllama)},
-	fieldVLLMBaseURL:    {label: "vLLM Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider, visible: providerSettingsField(domain.ProviderVLLM)},
-	fieldVLLMModel:      {label: "vLLM Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider, visible: providerSettingsField(domain.ProviderVLLM)},
-	fieldVLLMAPIKeyEnv:  {label: "vLLM API Key Env", kind: settingsFieldKindText, group: settingsFieldGroupProvider, visible: providerSettingsField(domain.ProviderVLLM)},
-	fieldReactRalphIter: {label: "ReAct Ralph Iterations", kind: settingsFieldKindText, group: settingsFieldGroupRalph, visible: alwaysVisibleSettingsField},
-	fieldPlanRalphIter:  {label: "Plan Ralph Iterations", kind: settingsFieldKindText, group: settingsFieldGroupRalph, visible: alwaysVisibleSettingsField},
+	fieldProvider:         {label: "Provider", kind: settingsFieldKindProvider, group: settingsFieldGroupProvider, visible: alwaysVisibleSettingsField},
+	fieldSelfDriving:      {label: "Self-Driving Mode", kind: settingsFieldKindToggle, group: settingsFieldGroupGeneral, visible: alwaysVisibleSettingsField},
+	fieldAutoTranslate:    {label: "Auto Translate", kind: settingsFieldKindToggle, group: settingsFieldGroupGeneral, visible: alwaysVisibleSettingsField},
+	fieldOllamaBaseURL:    {label: "Ollama Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider, visible: providerSettingsField(domain.ProviderOllama)},
+	fieldOllamaModel:      {label: "Ollama Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider, visible: providerSettingsField(domain.ProviderOllama)},
+	fieldVLLMBaseURL:      {label: "vLLM Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider, visible: providerSettingsField(domain.ProviderVLLM)},
+	fieldVLLMModel:        {label: "vLLM Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider, visible: providerSettingsField(domain.ProviderVLLM)},
+	fieldVLLMAPIKeyEnv:    {label: "vLLM API Key Env", kind: settingsFieldKindText, group: settingsFieldGroupProvider, visible: providerSettingsField(domain.ProviderVLLM)},
+	fieldReactRalphIter:   {label: "ReAct Ralph Iterations", kind: settingsFieldKindText, group: settingsFieldGroupRalph, visible: alwaysVisibleSettingsField},
+	fieldPlanRalphIter:    {label: "Plan Ralph Iterations", kind: settingsFieldKindText, group: settingsFieldGroupRalph, visible: alwaysVisibleSettingsField},
+	fieldCompactThreshold: {label: "Compact Threshold (k)", kind: settingsFieldKindText, group: settingsFieldGroupGeneral, visible: alwaysVisibleSettingsField},
 }
 
 func alwaysVisibleSettingsField(domain.Provider) bool {
@@ -177,6 +180,7 @@ func newSettingsFormState(settings domain.Settings) settingsFormState {
 	state.inputs[fieldVLLMAPIKeyEnv] = newSettingsInput("vLLM API Key Env", settings.Providers.VLLM.APIKeyEnv)
 	state.inputs[fieldReactRalphIter] = newSettingsInput("ReAct Ralph Iterations", strconv.Itoa(settings.ReactRalphIter))
 	state.inputs[fieldPlanRalphIter] = newSettingsInput("Plan Ralph Iterations", strconv.Itoa(settings.PlanRalphIter))
+	state.inputs[fieldCompactThreshold] = newSettingsInput("Compact Threshold (k)", strconv.Itoa(settings.CompactThresholdK))
 	state.focusField(state.focus)
 
 	return state
@@ -367,6 +371,7 @@ func (s settingsFormState) buildSettings(base domain.Settings) domain.Settings {
 	settings.AutoTranslate = s.autoTranslate
 	settings.ReactRalphIter = parsePositiveInt(s.inputs[fieldReactRalphIter].Value(), settings.ReactRalphIter)
 	settings.PlanRalphIter = parsePositiveInt(s.inputs[fieldPlanRalphIter].Value(), settings.PlanRalphIter)
+	settings.CompactThresholdK = parsePositiveInt(s.inputs[fieldCompactThreshold].Value(), settings.CompactThresholdK)
 	settings.Normalize()
 	return settings
 }

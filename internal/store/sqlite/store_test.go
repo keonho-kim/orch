@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"orch/domain"
+	"github.com/keonho-kim/orch/domain"
 )
 
 func TestStorePersistsProviderHistoryAndRuns(t *testing.T) {
@@ -32,30 +32,30 @@ func TestStorePersistsProviderHistoryAndRuns(t *testing.T) {
 		t.Fatalf("unexpected default provider: %q", settings.DefaultProvider)
 	}
 
-	if err := store.AddHistory(ctx, "implement login"); err != nil {
-		t.Fatalf("add history: %v", err)
+	if err := store.AddMessageHistory(ctx, "implement login"); err != nil {
+		t.Fatalf("add message history: %v", err)
 	}
-	history, err := store.ListHistory(ctx, 10)
+	history, err := store.ListMessageHistory(ctx, 10)
 	if err != nil {
-		t.Fatalf("list history: %v", err)
+		t.Fatalf("list message history: %v", err)
 	}
 	if len(history) != 1 || history[0].Prompt != "implement login" {
-		t.Fatalf("unexpected history: %+v", history)
+		t.Fatalf("unexpected message history: %+v", history)
 	}
 
 	record := domain.RunRecord{
-		RunID:         "R1",
-		Mode:          domain.RunModeReact,
-		Provider:      domain.ProviderOllama,
-		Model:         "qwen2.5-coder",
-		Prompt:        "implement login",
-		CurrentTask:   "Thinking",
-		Status:        domain.StatusRunning,
-		WorkspacePath: "/tmp/test-workspace",
-		CurrentCwd:    "/tmp/test-workspace",
+		RunID:          "R1",
+		Mode:           domain.RunModeReact,
+		Provider:       domain.ProviderOllama,
+		Model:          "qwen2.5-coder",
+		Prompt:         "implement login",
+		CurrentTask:    "Thinking",
+		Status:         domain.StatusRunning,
+		WorkspacePath:  "/tmp/test-workspace",
+		CurrentCwd:     "/tmp/test-workspace",
 		RalphIteration: 1,
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}
 	if err := store.CreateRun(ctx, record); err != nil {
 		t.Fatalf("create run: %v", err)

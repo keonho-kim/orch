@@ -6,13 +6,13 @@ import (
 	"strings"
 	"sync"
 
-	"orch/domain"
-	"orch/internal/adapters"
-	"orch/internal/prompts"
+	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/adapters"
+	"github.com/keonho-kim/orch/internal/prompts"
 )
 
 const (
-	LanguageKorean = "kor"
+	LanguageKorean  = "kor"
 	LanguageEnglish = "en"
 	LanguageChinese = "ch"
 )
@@ -34,7 +34,7 @@ func Detect(
 		Model: model,
 		Messages: []adapters.Message{
 			{
-				Role: "system",
+				Role:    "system",
 				Content: prompts.DetectLanguagePrompt(),
 			},
 			{Role: "user", Content: rawPrompt},
@@ -158,7 +158,7 @@ func translateText(
 		Model: model,
 		Messages: []adapters.Message{
 			{
-				Role: "system",
+				Role:    "system",
 				Content: prompts.TranslatePrompt(targetLanguage),
 			},
 			{Role: "user", Content: source},

@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"orch/domain"
-	"orch/internal/adapters"
+	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/adapters"
 )
 
 func TestDetectReturnsKor(t *testing.T) {
@@ -19,7 +19,7 @@ func TestDetectReturnsKor(t *testing.T) {
 	server := newTranslationTestServer(t)
 	defer server.Close()
 
-	detected, err := Detect(context.Background(), adapters.NewOllamaClient(), domain.ProviderSettings{
+	detected, err := Detect(context.Background(), adapters.NewVLLMClient(), domain.ProviderSettings{
 		BaseURL: server.URL + "/v1",
 		Model:   "test-model",
 	}, "test-model", "로그인 구현해줘")
@@ -37,7 +37,7 @@ func TestPrepareFromDetectionBuildsEnglishBundle(t *testing.T) {
 	server := newTranslationTestServer(t)
 	defer server.Close()
 
-	prepared, err := PrepareFromDetection(context.Background(), adapters.NewOllamaClient(), domain.ProviderSettings{
+	prepared, err := PrepareFromDetection(context.Background(), adapters.NewVLLMClient(), domain.ProviderSettings{
 		BaseURL: server.URL + "/v1",
 		Model:   "test-model",
 	}, "test-model", "ship it", LanguageEnglish)
@@ -65,7 +65,7 @@ func TestPrepareFromDetectionBuildsChineseBundle(t *testing.T) {
 	server := newTranslationTestServer(t)
 	defer server.Close()
 
-	prepared, err := PrepareFromDetection(context.Background(), adapters.NewOllamaClient(), domain.ProviderSettings{
+	prepared, err := PrepareFromDetection(context.Background(), adapters.NewVLLMClient(), domain.ProviderSettings{
 		BaseURL: server.URL + "/v1",
 		Model:   "test-model",
 	}, "test-model", "中文需求", LanguageChinese)

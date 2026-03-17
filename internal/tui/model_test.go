@@ -96,6 +96,42 @@ func TestSyncChatViewportFollowsBottomOnStreamUpdates(t *testing.T) {
 	}
 }
 
+func TestSlashMenuUsesArrowKeysInsteadOfMessageHistory(t *testing.T) {
+	t.Parallel()
+
+	model := testModel(80, 24)
+	model.messageHistoryIndex = -1
+	model.input.SetValue("/")
+	model.refreshSlashMenu()
+
+	updatedModel, _ := model.updateDashboard(tea.KeyMsg{Type: tea.KeyDown})
+	updated := updatedModel.(Model)
+	if updated.slashMenuIndex != 1 {
+		t.Fatalf("expected slash menu index to move down, got %d", updated.slashMenuIndex)
+	}
+	if updated.messageHistoryIndex != -1 {
+		t.Fatalf("did not expect message history navigation while slash menu is visible, got %d", updated.messageHistoryIndex)
+	}
+}
+
+func TestSlashMenuEnterCompletesSelectedCommand(t *testing.T) {
+	t.Parallel()
+
+	model := testModel(80, 24)
+	model.input.SetValue("/c")
+	model.refreshSlashMenu()
+	model.slashMenuIndex = 1
+
+	updatedModel, cmd := model.updateDashboard(tea.KeyMsg{Type: tea.KeyEnter})
+	updated := updatedModel.(Model)
+	if cmd != nil {
+		t.Fatal("did not expect submit command when selecting slash completion")
+	}
+	if updated.input.Value() != "/compact" {
+		t.Fatalf("expected selected slash command to complete input, got %q", updated.input.Value())
+	}
+}
+
 func tallModel() Model {
 	model := testModel(80, 18)
 	model.snapshot.CurrentThinking = strings.Repeat("thinking line\n", 8)

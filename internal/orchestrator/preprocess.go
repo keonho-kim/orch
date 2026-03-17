@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"orch/domain"
-	"orch/internal/autotranslate"
-	"orch/internal/userprefs"
+	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/autotranslate"
+	"github.com/keonho-kim/orch/internal/userprefs"
 )
 
 func (s *Service) preprocessPrompt(

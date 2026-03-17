@@ -5,8 +5,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"orch/domain"
-	"orch/internal/branding"
+	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/branding"
 )
 
 var (
@@ -18,6 +18,8 @@ var (
 	statusLineStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("62"))
 	commandLabelStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
 	commandMetaStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("24")).Padding(0, 1)
+	slashMenuStyle      = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("24")).Padding(0, 1)
+	slashMenuOnStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("24"))
 	providerChipOn      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("33")).Padding(0, 1)
 	providerChipOff     = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Background(lipgloss.Color("236")).Padding(0, 1)
 	userLabelStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("31")).Padding(0, 1)
@@ -40,6 +42,9 @@ func (m Model) View() string {
 	if m.showExitConfirm {
 		return renderViewport(m.renderCompactPage(width, m.renderExitConfirmLines(width)), width, height)
 	}
+	if m.showHistoryPicker {
+		return renderViewport(m.renderCompactPage(width, m.renderHistoryPickerLines(width)), width, height)
+	}
 	if m.settings.visible {
 		return renderViewport(m.renderPageWithHeader(width, m.renderSettingsLines(width)), width, height)
 	}
@@ -54,6 +59,9 @@ func (m Model) renderDashboardView(width int, height int) string {
 	m.body.Height = bodyHeight
 
 	lines := strings.Split(m.body.View(), "\n")
+	if menu := m.renderSlashCommandMenu(width); menu != "" {
+		lines = append(lines, menu)
+	}
 	lines = append(lines, m.renderCommandLine(width), statusLineStyle.Render(fitLine(m.statusLine(), width)))
 	for _, line := range help {
 		lines = append(lines, footerStyle.Render(fitLine(line, width)))
@@ -165,6 +173,31 @@ func (m Model) renderApprovalLines(width int) []string {
 	}
 }
 
+func (m Model) renderHistoryPickerLines(width int) []string {
+	lines := []string{
+		sectionHeader("SESSION HISTORY", width),
+		"",
+		fitLine("Up/Down: Move  Enter: Restore  Esc: Close", width),
+	}
+	if len(m.historySessions) == 0 {
+		lines = append(lines, "", fitLine("No saved sessions.", width))
+		return lines
+	}
+
+	for index, session := range m.historySessions {
+		prefix := "  "
+		if index == m.historySessionIndex {
+			prefix = "> "
+		}
+		title := strings.TrimSpace(session.Title)
+		if title == "" {
+			title = "Untitled session"
+		}
+		lines = append(lines, fitLine(prefix+session.SessionID+"  "+title, width))
+	}
+	return lines
+}
+
 func (m Model) statusLine() string {
 	if strings.TrimSpace(m.statusMessage) != "" {
 		return m.statusMessage
@@ -235,7 +268,7 @@ func (m Model) viewportHeight() int {
 }
 
 func (m Model) chatViewportHeight(width int, height int) int {
-	bodyHeight := height - 2 - len(m.dashboardHelpLines(width, height))
+	bodyHeight := height - 2 - len(m.dashboardHelpLines(width, height)) - len(m.renderSlashCommandMenuLines(width))
 	if bodyHeight < 1 {
 		return 1
 	}
@@ -258,13 +291,13 @@ func (m Model) helpLines(width int) []string {
 	switch {
 	case width >= 84:
 		return []string{
-			renderHelpLine("Enter", "Send", "Shift+Tab", "Mode", "Up/Down", "History", "PgUp/PgDn", "Scroll", "Home/End", "Jump", "Ctrl+T", "Show Think", "Ctrl+S", "Settings"),
-			renderHelpLine("/exit", "Quit", "Mouse", "Scroll", "Enter", "Approve", "Esc", "Cancel"),
+			renderHelpLine("Enter", "Send", "Shift+Tab", "Mode", "Up/Down", "Messages", "PgUp/PgDn", "Scroll", "Home/End", "Jump", "Ctrl+T", "Show Think", "Ctrl+S", "Settings"),
+			renderHelpLine("/clear", "New Session", "/compact", "Compact", "/exit", "Quit", "Mouse", "Scroll", "Enter", "Approve", "Esc", "Cancel"),
 		}
 	default:
 		return []string{
-			renderHelpLine("Enter", "Send", "Shift+Tab", "Mode", "Up/Down", "History", "PgUp/PgDn", "Scroll", "Ctrl+T", "Show Think"),
-			renderHelpLine("Home/End", "Jump", "Ctrl+S", "Settings", "/exit", "Quit"),
+			renderHelpLine("Enter", "Send", "Shift+Tab", "Mode", "Up/Down", "Messages", "PgUp/PgDn", "Scroll", "Ctrl+T", "Show Think"),
+			renderHelpLine("Home/End", "Jump", "Ctrl+S", "Settings", "/clear", "New Session", "/compact", "Compact", "/exit", "Quit"),
 		}
 	}
 }
@@ -280,6 +313,35 @@ func renderHelpLine(parts ...string) string {
 		items = append(items, keyStyle.Render(parts[index])+" "+parts[index+1])
 	}
 	return strings.Join(items, "  |  ")
+}
+
+func (m Model) renderSlashCommandMenu(width int) string {
+	lines := m.renderSlashCommandMenuLines(width)
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m Model) renderSlashCommandMenuLines(width int) []string {
+	options := filteredSlashCommands(m.input.Value())
+	if len(options) == 0 {
+		return nil
+	}
+
+	maxWidth := max(20, width-2)
+	lines := make([]string, 0, len(options))
+	selected := m.selectedSlashCommand()
+	for _, option := range options {
+		label := option.value + "  " + option.description
+		if option.value == selected.value {
+			lines = append(lines, slashMenuOnStyle.Render(fitLine("> "+label, maxWidth)))
+			continue
+		}
+		lines = append(lines, fitLine("  "+label, maxWidth))
+	}
+	rendered := slashMenuStyle.Width(maxWidth).Render(strings.Join(lines, "\n"))
+	return strings.Split(rendered, "\n")
 }
 
 func renderProviderOption(label string, selected bool) string {

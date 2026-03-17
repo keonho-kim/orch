@@ -12,12 +12,12 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"orch/domain"
+	"github.com/keonho-kim/orch/domain"
 )
 
 const (
 	defaultProviderKey = "default_provider"
-	schemaVersion      = 3
+	schemaVersion      = 4
 )
 
 type Store struct {
@@ -115,7 +115,7 @@ func (s *Store) SaveDefaultProvider(ctx context.Context, provider domain.Provide
 	return nil
 }
 
-func (s *Store) AddHistory(ctx context.Context, prompt string) error {
+func (s *Store) AddMessageHistory(ctx context.Context, prompt string) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO history (prompt, created_at)
 		VALUES (?, CURRENT_TIMESTAMP)
@@ -127,7 +127,7 @@ func (s *Store) AddHistory(ctx context.Context, prompt string) error {
 	return nil
 }
 
-func (s *Store) ListHistory(ctx context.Context, limit int) ([]domain.HistoryEntry, error) {
+func (s *Store) ListMessageHistory(ctx context.Context, limit int) ([]domain.MessageHistoryEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, prompt, created_at
 		FROM history
@@ -139,9 +139,9 @@ func (s *Store) ListHistory(ctx context.Context, limit int) ([]domain.HistoryEnt
 	}
 	defer rows.Close()
 
-	var entries []domain.HistoryEntry
+	var entries []domain.MessageHistoryEntry
 	for rows.Next() {
-		var entry domain.HistoryEntry
+		var entry domain.MessageHistoryEntry
 		var createdAt string
 		if err := rows.Scan(&entry.ID, &entry.Prompt, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan history: %w", err)
@@ -179,12 +179,13 @@ func (s *Store) NextRunID(ctx context.Context) (string, error) {
 func (s *Store) CreateRun(ctx context.Context, record domain.RunRecord) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO runs (
-			run_id, mode, provider, model, prompt, current_task, status, workspace_path,
+			run_id, session_id, mode, provider, model, prompt, current_task, status, workspace_path,
 			current_cwd, ralph_iteration, final_output, created_at, updated_at
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 	`,
 		record.RunID,
+		record.SessionID,
 		record.Mode.String(),
 		record.Provider.String(),
 		record.Model,
@@ -206,11 +207,12 @@ func (s *Store) CreateRun(ctx context.Context, record domain.RunRecord) error {
 func (s *Store) UpdateRun(ctx context.Context, record domain.RunRecord) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE runs
-		SET mode = ?, provider = ?, model = ?, prompt = ?, current_task = ?, status = ?,
+		SET session_id = ?, mode = ?, provider = ?, model = ?, prompt = ?, current_task = ?, status = ?,
 		    workspace_path = ?, current_cwd = ?, ralph_iteration = ?, final_output = ?,
 		    updated_at = CURRENT_TIMESTAMP
 		WHERE run_id = ?
 	`,
+		record.SessionID,
 		record.Mode.String(),
 		record.Provider.String(),
 		record.Model,
@@ -231,13 +233,31 @@ func (s *Store) UpdateRun(ctx context.Context, record domain.RunRecord) error {
 }
 
 func (s *Store) ListRuns(ctx context.Context, limit int) ([]domain.RunRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT run_id, mode, provider, model, prompt, current_task, status,
+	return s.listRuns(ctx, "", limit)
+}
+
+func (s *Store) ListRunsBySession(ctx context.Context, sessionID string, limit int) ([]domain.RunRecord, error) {
+	return s.listRuns(ctx, sessionID, limit)
+}
+
+func (s *Store) listRuns(ctx context.Context, sessionID string, limit int) ([]domain.RunRecord, error) {
+	query := `
+		SELECT run_id, session_id, mode, provider, model, prompt, current_task, status,
 		       workspace_path, current_cwd, ralph_iteration, final_output, created_at, updated_at
 		FROM runs
+	`
+	args := make([]any, 0, 2)
+	if strings.TrimSpace(sessionID) != "" {
+		query += ` WHERE session_id = ?`
+		args = append(args, sessionID)
+	}
+	query += `
 		ORDER BY created_at DESC, rowid DESC
 		LIMIT ?
-	`, limit)
+	`
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list runs: %w", err)
 	}
@@ -246,12 +266,14 @@ func (s *Store) ListRuns(ctx context.Context, limit int) ([]domain.RunRecord, er
 	var records []domain.RunRecord
 	for rows.Next() {
 		var record domain.RunRecord
+		var sessionIDValue string
 		var modeRaw string
 		var providerRaw string
 		var createdAt string
 		var updatedAt string
 		if err := rows.Scan(
 			&record.RunID,
+			&sessionIDValue,
 			&modeRaw,
 			&providerRaw,
 			&record.Model,
@@ -277,6 +299,7 @@ func (s *Store) ListRuns(ctx context.Context, limit int) ([]domain.RunRecord, er
 			return nil, fmt.Errorf("parse run provider: %w", err)
 		}
 
+		record.SessionID = sessionIDValue
 		record.Mode = mode
 		record.Provider = provider
 		if record.CurrentCwd == "" {

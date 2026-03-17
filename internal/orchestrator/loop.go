@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"orch/domain"
-	"orch/internal/adapters"
-	"orch/internal/prompts"
+	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/adapters"
+	"github.com/keonho-kim/orch/internal/prompts"
 )
 
 func (s *Service) executeRun(ctx context.Context, runID string) {
@@ -32,9 +32,13 @@ func (s *Service) executeRun(ctx context.Context, runID string) {
 		_ = s.failRun(runID, err)
 		return
 	}
-	messages := []adapters.Message{
-		{Role: "user", Content: preparedPrompt},
+	sessionMessages, err := s.sessionContextMessages()
+	if err != nil {
+		_ = s.failRun(runID, err)
+		return
 	}
+	messages := append([]adapters.Message{}, sessionMessages...)
+	messages = append(messages, adapters.Message{Role: "user", Content: preparedPrompt})
 
 	limit := ralphLimit(snapshot.Settings, record.Mode)
 	for iteration := 1; iteration <= limit; iteration++ {
@@ -50,7 +54,7 @@ func (s *Service) executeRun(ctx context.Context, runID string) {
 			return
 		}
 
-		contextMessage, err := buildIterationContext(state.record, snapshot.ActivePlan, strings.TrimSpace(state.draft))
+		contextMessage, err := s.buildIterationContext(state.record, state.selectedSkills, state.resolvedRefs, snapshot.ActivePlan, strings.TrimSpace(state.draft))
 		if err != nil {
 			_ = s.failRun(runID, err)
 			return
@@ -86,6 +90,10 @@ func (s *Service) executeRun(ctx context.Context, runID string) {
 		}
 
 		s.setRunDraft(runID, result.Content)
+		if err := s.appendSessionAssistant(runID, result); err != nil {
+			_ = s.failRun(runID, err)
+			return
+		}
 		messages = append(messages, adapters.ToAssistantMessage(result))
 		if len(result.ToolCalls) == 0 {
 			_ = s.completeRun(runID)
@@ -102,7 +110,7 @@ func (s *Service) executeRun(ctx context.Context, runID string) {
 				return
 			}
 
-			review, err := s.tooling.Review(state.record.WorkspacePath, state.record, snapshot.Settings, call)
+			review, err := s.tooling.Review(state.record.WorkspacePath, state.record, state.env, snapshot.Settings, call)
 			if err != nil {
 				_ = s.failRun(runID, err)
 				return
@@ -145,6 +153,14 @@ func (s *Service) executeRun(ctx context.Context, runID string) {
 				Name:       call.Name,
 				Content:    execution.Output,
 			}))
+			if err := s.appendSessionTool(runID, domain.ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Content:    execution.Output,
+			}); err != nil {
+				_ = s.failRun(runID, err)
+				return
+			}
 			snapshot = s.Snapshot()
 		}
 	}
@@ -286,6 +302,12 @@ func (s *Service) completeRun(runID string) error {
 			return err
 		}
 	}
+	content := draft
+	if content == "" {
+		content = output
+	}
+	go s.runChatHistoryAssistantSummary(record.SessionID, record.RunID, content)
+	go s.runSessionMaintenance(record.SessionID)
 	s.publish(UIEvent{RunID: runID, Message: "Run completed."})
 	return nil
 }
@@ -351,7 +373,7 @@ func (s *Service) state(runID string) (*runState, bool) {
 	return state, ok
 }
 
-func buildIterationContext(record domain.RunRecord, activePlan domain.PlanCache, draftPlan string) (string, error) {
+func (s *Service) buildIterationContext(record domain.RunRecord, selectedSkills []selectedSkill, resolvedReferences string, activePlan domain.PlanCache, draftPlan string) (string, error) {
 	product, err := readWorkspaceFile(record.WorkspacePath, "PRODUCT.md")
 	if err != nil {
 		return "", err
@@ -368,8 +390,23 @@ func buildIterationContext(record domain.RunRecord, activePlan domain.PlanCache,
 	if err != nil {
 		return "", err
 	}
+	chatHistory, err := s.sessions.ReadChatHistory()
+	if err != nil {
+		return "", err
+	}
 
-	return prompts.IterationContext(record, product, agents, user, skills, activePlan, draftPlan), nil
+	return prompts.IterationContext(
+		record,
+		product,
+		agents,
+		user,
+		skills,
+		formatSelectedSkills(selectedSkills),
+		chatHistory,
+		resolvedReferences,
+		activePlan,
+		draftPlan,
+	), nil
 }
 
 func readWorkspaceFile(workspaceRoot string, relativePath string) (string, error) {
@@ -379,6 +416,23 @@ func readWorkspaceFile(workspaceRoot string, relativePath string) (string, error
 		return "", fmt.Errorf("read %s: %w", relativePath, err)
 	}
 	return strings.TrimSpace(string(data)), nil
+}
+
+func formatSelectedSkills(selectedSkills []selectedSkill) string {
+	if len(selectedSkills) == 0 {
+		return ""
+	}
+
+	sections := make([]string, 0, len(selectedSkills))
+	for _, skill := range selectedSkills {
+		content := strings.TrimSpace(skill.Content)
+		if content == "" {
+			continue
+		}
+
+		sections = append(sections, fmt.Sprintf("$%s (%s):\n%s", skill.Name, skill.Path, content))
+	}
+	return strings.Join(sections, "\n\n")
 }
 
 func ralphLimit(settings domain.Settings, mode domain.RunMode) int {

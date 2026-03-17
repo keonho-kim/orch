@@ -1,14 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-path=""
+script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# shellcheck source=/dev/null
+. "$script_dir/common.sh"
+
+target=""
+scope=""
+display=""
+workspace_root=""
 start=""
 end=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --path)
-      path="${2:-}"
+    --target)
+      target="${2:-}"
+      shift 2
+      ;;
+    --scope)
+      scope="${2:-}"
+      shift 2
+      ;;
+    --display)
+      display="${2:-}"
+      shift 2
+      ;;
+    --workspace-root)
+      workspace_root="${2:-}"
       shift 2
       ;;
     --start)
@@ -20,35 +39,37 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     *)
-      echo "unknown arg: $1" >&2
-      exit 1
+      ot_die "unknown arg: $1"
       ;;
   esac
 done
 
-if [[ -z "$path" ]]; then
-  echo "--path is required" >&2
-  exit 1
-fi
+ot_require_common_args "$target" "$scope" "$display" "$workspace_root"
+ot_reject_hidden_external_target "$scope" "$target"
 
-target="$OT_WORKSPACE_ROOT/$path"
 if [[ ! -e "$target" ]]; then
-  echo "path not found: $path" >&2
-  exit 1
+  ot_die "path not found: $target"
 fi
 
 if [[ -d "$target" ]]; then
   if [[ -n "$start" || -n "$end" ]]; then
-    echo "ot read line ranges are only supported for files" >&2
-    exit 1
+    ot_die "ot read line ranges are only supported for files"
   fi
-  find "$target" -mindepth 1 -maxdepth 1 -print | sed "s#^$OT_WORKSPACE_ROOT/##"
+
+  if [[ "$scope" == "inside" ]]; then
+    while IFS= read -r entry; do
+      ot_display_path "$entry" "$display" "$workspace_root"
+    done < <(find "$target" -mindepth 1 -maxdepth 1 -print)
+  else
+    while IFS= read -r entry; do
+      ot_display_path "$entry" "$display" "$workspace_root"
+    done < <(find "$target" -mindepth 1 -maxdepth 1 ! -name '.*' -print)
+  fi
   exit 0
 fi
 
 if [[ ! -f "$target" ]]; then
-  echo "unsupported read target: $path" >&2
-  exit 1
+  ot_die "unsupported read target: $target"
 fi
 
 if [[ -n "$start" || -n "$end" ]]; then

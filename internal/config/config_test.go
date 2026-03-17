@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"orch/domain"
+	"github.com/keonho-kim/orch/domain"
 )
 
 func TestResolvePaths(t *testing.T) {
@@ -43,11 +43,12 @@ func TestSaveAndLoadSettings(t *testing.T) {
 				APIKeyEnv: "VLLM_API_KEY",
 			},
 		},
-		ApprovalPolicy: domain.ApprovalConfirmMutations,
-		SelfDrivingMode: true,
-		AutoTranslate:   true,
-		ReactRalphIter:  5,
-		PlanRalphIter:   7,
+		ApprovalPolicy:    domain.ApprovalConfirmMutations,
+		SelfDrivingMode:   true,
+		AutoTranslate:     true,
+		ReactRalphIter:    5,
+		PlanRalphIter:     7,
+		CompactThresholdK: 150,
 	}
 	if err := SaveSettings(paths, settings); err != nil {
 		t.Fatalf("save settings: %v", err)
@@ -71,6 +72,9 @@ func TestSaveAndLoadSettings(t *testing.T) {
 	}
 	if loaded.ReactRalphIter != 5 || loaded.PlanRalphIter != 7 {
 		t.Fatalf("unexpected Ralph settings: react=%d plan=%d", loaded.ReactRalphIter, loaded.PlanRalphIter)
+	}
+	if loaded.CompactThresholdK != 150 {
+		t.Fatalf("unexpected compact threshold: %d", loaded.CompactThresholdK)
 	}
 }
 

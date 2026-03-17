@@ -1,4 +1,4 @@
-module orch
+module github.com/keonho-kim/orch
 
 go 1.26.1
 

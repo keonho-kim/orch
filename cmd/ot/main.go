@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"orch/domain"
-	"orch/internal/tooling"
+	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/tooling"
 )
 
 func main() {

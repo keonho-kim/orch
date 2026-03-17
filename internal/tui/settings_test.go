@@ -5,7 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"orch/domain"
+	"github.com/keonho-kim/orch/domain"
 )
 
 func TestSettingsNavigationUsesUpDown(t *testing.T) {

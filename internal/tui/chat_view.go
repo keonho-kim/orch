@@ -6,8 +6,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"orch/domain"
-	"orch/internal/branding"
+	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/branding"
 )
 
 func (m Model) renderChatTimeline(width int) string {
@@ -20,7 +20,14 @@ func (m Model) renderChatTimeline(width int) string {
 	}
 
 	for index, run := range runs {
-		sections = append(sections, m.renderRunSection(run, width, index > 0))
+		section := m.renderRunSection(run, width, index > 0)
+		if strings.TrimSpace(section) == "" {
+			continue
+		}
+		sections = append(sections, section)
+	}
+	if len(sections) == 1 {
+		return strings.Join(sections, "\n")
 	}
 	return strings.Join(sections, "\n\n")
 }
@@ -35,18 +42,22 @@ func (m Model) renderChatHeader() string {
 }
 
 func (m Model) renderRunSection(run domain.RunRecord, width int, withSeparator bool) string {
+	thinkingBlock := ""
+	if run.RunID == m.snapshot.CurrentRunID {
+		thinkingBlock = m.renderThinkingBlock(width)
+	}
+	output := m.runOutput(run)
+
 	parts := make([]string, 0, 5)
 	if withSeparator {
 		parts = append(parts, renderRunSeparator(width))
 	}
 	parts = append(parts, subtleStyle.Render(m.runMeta(run)))
 	parts = append(parts, renderMessageBlock("USER", run.Prompt, width, userLabelStyle, userBoxStyle, renderWrappedLines))
-	if run.RunID == m.snapshot.CurrentRunID {
-		if thinkingBlock := m.renderThinkingBlock(width); thinkingBlock != "" {
-			parts = append(parts, thinkingBlock)
-		}
+	if thinkingBlock != "" {
+		parts = append(parts, thinkingBlock)
 	}
-	parts = append(parts, renderMessageBlock("ORCH", m.runOutput(run), width, assistantLabelStyle, assistantBoxStyle, renderStyledLines))
+	parts = append(parts, renderMessageBlock("ORCH", output, width, assistantLabelStyle, assistantBoxStyle, renderStyledLines))
 	return strings.Join(parts, "\n")
 }
 

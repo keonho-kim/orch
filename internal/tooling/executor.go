@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"orch/domain"
+	"github.com/keonho-kim/orch/domain"
 )
 
 const maxCommandOutputBytes = 64000
@@ -30,13 +30,13 @@ func NewExecutor() *Executor {
 	return &Executor{ot: NewOTRunner()}
 }
 
-func (e *Executor) Review(workspaceRoot string, record domain.RunRecord, settings domain.Settings, call domain.ToolCall) (Execution, error) {
+func (e *Executor) Review(workspaceRoot string, record domain.RunRecord, env []string, settings domain.Settings, call domain.ToolCall) (Execution, error) {
 	request, err := decodeExecRequest(call)
 	if err != nil {
 		return Execution{}, err
 	}
 
-	requiresApproval, reason, err := classifyApproval(workspaceRoot, record, settings, request)
+	requiresApproval, reason, err := classifyApproval(workspaceRoot, record, env, settings, request)
 	if err != nil {
 		return Execution{}, err
 	}
@@ -95,7 +95,7 @@ func (e *Executor) Execute(ctx context.Context, workspaceRoot string, record dom
 	}
 }
 
-func classifyApproval(workspaceRoot string, record domain.RunRecord, settings domain.Settings, request domain.ExecRequest) (bool, string, error) {
+func classifyApproval(workspaceRoot string, record domain.RunRecord, env []string, settings domain.Settings, request domain.ExecRequest) (bool, string, error) {
 	if err := validateModeCommand(workspaceRoot, record, request); err != nil {
 		return false, "", err
 	}
@@ -108,21 +108,23 @@ func classifyApproval(workspaceRoot string, record domain.RunRecord, settings do
 		return true, "rm and mv always require approval.", nil
 	}
 
-	if settings.SelfDrivingMode {
-		return false, "", nil
-	}
-
 	switch request.Command {
 	case "ot":
-		return classifyOTApproval(request)
+		return classifyOTApproval(workspaceRoot, record, env, settings, request)
 	case "bash":
 		if err := validateCustomScript(workspaceRoot, request); err != nil {
 			return false, "", err
+		}
+		if settings.SelfDrivingMode {
+			return false, "", nil
 		}
 		return true, "Custom tools/*.sh scripts require approval.", nil
 	default:
 		if !allowedDirectCommands()[request.Command] {
 			return false, "", fmt.Errorf("command %q is not allowlisted", request.Command)
+		}
+		if settings.SelfDrivingMode {
+			return false, "", nil
 		}
 		return true, fmt.Sprintf("Command %s requires approval.", request.Command), nil
 	}
@@ -141,27 +143,49 @@ func validateModeCommand(workspaceRoot string, record domain.RunRecord, request 
 		_, err := resolveCommandPath(workspaceRoot, baseCwd(record), request.Args[0])
 		return err
 	case "ot":
-		if len(request.Args) == 0 || strings.TrimSpace(request.Args[0]) != "read" {
-			return fmt.Errorf("plan mode only allows ot read")
+		if len(request.Args) == 0 {
+			return fmt.Errorf("plan mode only allows ot read, ot list, and ot search")
 		}
-		return nil
+		switch strings.TrimSpace(request.Args[0]) {
+		case "read", "list", "search":
+			return nil
+		default:
+			return fmt.Errorf("plan mode only allows ot read, ot list, and ot search")
+		}
 	default:
-		return fmt.Errorf("plan mode only allows cd and ot read")
+		return fmt.Errorf("plan mode only allows cd, ot read, ot list, and ot search")
 	}
 }
 
-func classifyOTApproval(request domain.ExecRequest) (bool, string, error) {
-	if len(request.Args) == 0 {
-		return false, "", fmt.Errorf("ot requires a subcommand")
+func classifyOTApproval(workspaceRoot string, record domain.RunRecord, env []string, settings domain.Settings, request domain.ExecRequest) (bool, string, error) {
+	inspection, err := inspectOTRequest(workspaceRoot, record, request)
+	if err != nil {
+		return false, "", err
 	}
 
-	switch strings.TrimSpace(request.Args[0]) {
-	case "read":
+	switch inspection.Subcommand {
+	case "read", "list", "search":
+		if inspection.WithinWorkspace {
+			return false, "", nil
+		}
+		return true, fmt.Sprintf(otSearchReasonOutside, inspection.Subcommand), nil
+	case "pointer":
 		return false, "", nil
 	case "write":
 		return true, "ot write requires approval.", nil
+	case "subagent":
+		if subagentDepth(env) > 0 {
+			return false, "", fmt.Errorf("nested ot subagent runs are not allowed")
+		}
+		if settings.SelfDrivingMode {
+			return false, "", nil
+		}
+		return true, "ot subagent requires approval.", nil
 	default:
-		return true, fmt.Sprintf("ot %s requires approval.", request.Args[0]), nil
+		if settings.SelfDrivingMode {
+			return false, "", nil
+		}
+		return true, fmt.Sprintf("ot %s requires approval.", inspection.Subcommand), nil
 	}
 }
 

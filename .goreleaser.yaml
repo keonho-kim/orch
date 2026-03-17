@@ -1,0 +1,39 @@
+version: 2
+
+project_name: orch
+
+builds:
+  - id: orch
+    main: ./cmd/orch
+    binary: orch
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/keonho-kim/orch/internal/branding.Version={{ .Version }}
+  - id: ot
+    main: ./cmd/ot
+    binary: ot
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: binaries
+    ids:
+      - orch
+      - ot
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    wrap_in_directory: true
+    strip_binary_directory: true
+
+checksum:
+  name_template: checksums.txt

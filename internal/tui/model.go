@@ -7,8 +7,8 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"orch/domain"
-	"orch/internal/orchestrator"
+	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/orchestrator"
 )
 
 type Model struct {
@@ -19,15 +19,19 @@ type Model struct {
 	width  int
 	height int
 
-	snapshot        orchestrator.Snapshot
-	historyIndex    int
-	historyDraft    string
-	composerMode    domain.RunMode
-	statusMessage   string
-	showThinking    bool
-	followOutput    bool
-	showExitConfirm bool
-	settings        settingsModalState
+	snapshot            orchestrator.Snapshot
+	messageHistoryIndex int
+	messageHistoryDraft string
+	composerMode        domain.RunMode
+	statusMessage       string
+	showThinking        bool
+	followOutput        bool
+	showExitConfirm     bool
+	showHistoryPicker   bool
+	historySessions     []domain.SessionMetadata
+	historySessionIndex int
+	slashMenuIndex      int
+	settings            settingsModalState
 }
 
 type serviceUpdateMsg struct {
@@ -58,15 +62,16 @@ func New(service *orchestrator.Service) Model {
 	body.MouseWheelDelta = 3
 
 	model := Model{
-		service:      service,
-		input:        input,
-		body:         body,
-		historyIndex: -1,
-		composerMode: domain.RunModeReact,
-		snapshot:     service.Snapshot(),
-		showThinking: true,
-		followOutput: true,
-		settings:     newSettingsModal(service.Snapshot().Settings),
+		service:             service,
+		input:               input,
+		body:                body,
+		messageHistoryIndex: -1,
+		slashMenuIndex:      0,
+		composerMode:        domain.RunModeReact,
+		snapshot:            service.Snapshot(),
+		showThinking:        true,
+		followOutput:        true,
+		settings:            newSettingsModal(service.Snapshot().Settings),
 	}
 	if model.needsSettingsConfiguration() {
 		model.settings = newSetupSettingsModal(model.snapshot.Settings)
@@ -75,6 +80,21 @@ func New(service *orchestrator.Service) Model {
 	model.syncChatViewport(true)
 
 	return model
+}
+
+func (m *Model) OpenHistoryPicker() {
+	m.showHistoryPicker = true
+	m.historySessionIndex = 0
+	m.statusMessage = "Browse saved sessions."
+	if m.service == nil {
+		return
+	}
+	sessions, err := m.service.ListSessions(200)
+	if err != nil {
+		m.statusMessage = err.Error()
+		return
+	}
+	m.historySessions = sessions
 }
 
 func (m Model) Init() tea.Cmd {
@@ -114,6 +134,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.showExitConfirm {
 			return m.updateExitConfirm(message)
+		}
+		if m.showHistoryPicker {
+			return m.updateHistoryPicker(message)
 		}
 		if m.settings.visible {
 			return m.updateSettings(message)
@@ -167,11 +190,24 @@ func (m Model) updateDashboard(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.followOutput = true
 			return m, nil
 		case "up":
+			if m.slashMenuVisible() {
+				m.moveSlashMenu(-1)
+				return m, nil
+			}
 			m.applyHistory(-1)
 			return m, nil
 		case "down":
+			if m.slashMenuVisible() {
+				m.moveSlashMenu(1)
+				return m, nil
+			}
 			m.applyHistory(1)
 			return m, nil
+		case "tab":
+			if m.slashMenuVisible() {
+				m.applySlashMenuSelection()
+				return m, nil
+			}
 		case "shift+tab":
 			if m.composerMode == domain.RunModeReact {
 				m.composerMode = domain.RunModePlan
@@ -183,6 +219,13 @@ func (m Model) updateDashboard(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			value := strings.TrimSpace(m.input.Value())
+			if m.slashMenuVisible() {
+				selected := m.selectedSlashCommand()
+				if selected.value != "" && value != selected.value {
+					m.applySlashMenuSelection()
+					return m, nil
+				}
+			}
 			command := parseDashboardCommand(value)
 			if command.kind == commandExit {
 				if m.service != nil && m.service.ActiveRunCount() > 0 {
@@ -192,18 +235,31 @@ func (m Model) updateDashboard(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, tea.Quit
 			}
+			if command.kind == commandClear {
+				m.input.SetValue("")
+				m.messageHistoryIndex = -1
+				m.messageHistoryDraft = ""
+				return m, clearSessionCmd(m.service)
+			}
+			if command.kind == commandCompact {
+				m.input.SetValue("")
+				m.messageHistoryIndex = -1
+				m.messageHistoryDraft = ""
+				return m, compactSessionCmd(m.service)
+			}
 			if value == "" {
 				return m, nil
 			}
 			m.input.SetValue("")
-			m.historyIndex = -1
-			m.historyDraft = ""
+			m.messageHistoryIndex = -1
+			m.messageHistoryDraft = ""
 			m.followOutput = true
 			return m, submitPromptCmd(m.service, value, m.composerMode)
 		}
 
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(message)
+		m.refreshSlashMenu()
 		return m, cmd
 	case tea.MouseMsg:
 		previousOffset := m.body.YOffset
@@ -216,6 +272,87 @@ func (m Model) updateDashboard(msg tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
+}
+
+func (m *Model) refreshSlashMenu() {
+	options := filteredSlashCommands(m.input.Value())
+	if len(options) == 0 {
+		m.slashMenuIndex = 0
+		return
+	}
+	if m.slashMenuIndex < 0 {
+		m.slashMenuIndex = 0
+	}
+	if m.slashMenuIndex >= len(options) {
+		m.slashMenuIndex = len(options) - 1
+	}
+}
+
+func (m Model) slashMenuVisible() bool {
+	return len(filteredSlashCommands(m.input.Value())) > 0
+}
+
+func (m *Model) moveSlashMenu(delta int) {
+	options := filteredSlashCommands(m.input.Value())
+	if len(options) == 0 {
+		m.slashMenuIndex = 0
+		return
+	}
+	m.slashMenuIndex += delta
+	if m.slashMenuIndex < 0 {
+		m.slashMenuIndex = len(options) - 1
+	}
+	if m.slashMenuIndex >= len(options) {
+		m.slashMenuIndex = 0
+	}
+}
+
+func (m Model) selectedSlashCommand() slashCommandOption {
+	options := filteredSlashCommands(m.input.Value())
+	if len(options) == 0 {
+		return slashCommandOption{}
+	}
+	index := m.slashMenuIndex
+	if index < 0 || index >= len(options) {
+		index = 0
+	}
+	return options[index]
+}
+
+func (m *Model) applySlashMenuSelection() {
+	selected := m.selectedSlashCommand()
+	if selected.value == "" {
+		return
+	}
+	m.input.SetValue(selected.value)
+	m.refreshSlashMenu()
+}
+
+func (m Model) updateHistoryPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.showHistoryPicker = false
+		m.statusMessage = "Session history closed."
+		return m, nil
+	case "up":
+		if m.historySessionIndex > 0 {
+			m.historySessionIndex--
+		}
+		return m, nil
+	case "down":
+		if m.historySessionIndex+1 < len(m.historySessions) {
+			m.historySessionIndex++
+		}
+		return m, nil
+	case "enter":
+		if len(m.historySessions) == 0 {
+			return m, nil
+		}
+		sessionID := m.historySessions[m.historySessionIndex].SessionID
+		m.showHistoryPicker = false
+		return m, restoreSessionCmd(m.service, sessionID)
+	}
+	return m, nil
 }
 
 func (m Model) updateExitConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -249,33 +386,33 @@ func (m Model) updateApproval(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) applyHistory(delta int) {
-	history := m.snapshot.History
-	if len(history) == 0 {
+	messageHistory := m.snapshot.MessageHistory
+	if len(messageHistory) == 0 {
 		return
 	}
 
-	if m.historyIndex == -1 {
-		m.historyDraft = m.input.Value()
+	if m.messageHistoryIndex == -1 {
+		m.messageHistoryDraft = m.input.Value()
 	}
 
-	nextIndex := m.historyIndex + delta
-	if m.historyIndex == -1 && delta < 0 {
+	nextIndex := m.messageHistoryIndex + delta
+	if m.messageHistoryIndex == -1 && delta < 0 {
 		nextIndex = 0
 	}
 	if nextIndex < -1 {
 		nextIndex = -1
 	}
-	if nextIndex >= len(history) {
-		nextIndex = len(history) - 1
+	if nextIndex >= len(messageHistory) {
+		nextIndex = len(messageHistory) - 1
 	}
 
-	m.historyIndex = nextIndex
-	if m.historyIndex == -1 {
-		m.input.SetValue(m.historyDraft)
+	m.messageHistoryIndex = nextIndex
+	if m.messageHistoryIndex == -1 {
+		m.input.SetValue(m.messageHistoryDraft)
 		return
 	}
 
-	m.input.SetValue(history[m.historyIndex])
+	m.input.SetValue(messageHistory[m.messageHistoryIndex])
 }
 
 func waitForServiceUpdate(service *orchestrator.Service) tea.Cmd {
@@ -309,6 +446,33 @@ func shutdownAllCmd(service *orchestrator.Service) tea.Cmd {
 			return operationErrMsg{err: err}
 		}
 		return exitCompletedMsg{}
+	}
+}
+
+func compactSessionCmd(service *orchestrator.Service) tea.Cmd {
+	return func() tea.Msg {
+		if err := service.ForceCompact(); err != nil {
+			return operationErrMsg{err: err}
+		}
+		return nil
+	}
+}
+
+func clearSessionCmd(service *orchestrator.Service) tea.Cmd {
+	return func() tea.Msg {
+		if err := service.OpenNewSession(); err != nil {
+			return operationErrMsg{err: err}
+		}
+		return nil
+	}
+}
+
+func restoreSessionCmd(service *orchestrator.Service, sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		if err := service.RestoreSession(sessionID); err != nil {
+			return operationErrMsg{err: err}
+		}
+		return nil
 	}
 }
 

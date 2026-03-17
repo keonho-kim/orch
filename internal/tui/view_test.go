@@ -8,9 +8,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"orch/domain"
-	"orch/internal/branding"
-	"orch/internal/orchestrator"
+	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/branding"
+	"github.com/keonho-kim/orch/internal/orchestrator"
 )
 
 func TestViewShowsApprovalModalWithoutDashboard(t *testing.T) {
@@ -45,6 +45,22 @@ func TestViewDoesNotRenderDuplicateCommandPrompt(t *testing.T) {
 	}
 }
 
+func TestViewShowsSlashCommandDropdown(t *testing.T) {
+	t.Parallel()
+
+	model := testModel(80, 24)
+	model.input.SetValue("/")
+	model.refreshSlashMenu()
+
+	view := stripANSI(model.View())
+	if !strings.Contains(view, "/clear  Open a new session") {
+		t.Fatalf("expected slash menu item in view, got %q", view)
+	}
+	if !strings.Contains(view, "/compact  Compact current session") {
+		t.Fatalf("expected compact slash menu item in view, got %q", view)
+	}
+}
+
 func TestDashboardViewFitsViewport(t *testing.T) {
 	t.Parallel()
 
@@ -75,6 +91,12 @@ func TestDashboardViewShowsConsoleChatLayout(t *testing.T) {
 	}
 	if !strings.Contains(view, "PgUp/PgDn") {
 		t.Fatalf("expected scroll help in view, got %q", view)
+	}
+	if !strings.Contains(view, "Up/Down Messages") {
+		t.Fatalf("expected message history help in view, got %q", view)
+	}
+	if !strings.Contains(view, "/clear New Session") {
+		t.Fatalf("expected new-session help for /clear, got %q", view)
 	}
 }
 

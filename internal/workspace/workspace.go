@@ -157,18 +157,19 @@ func sanitizeEnv(baseEnv []string) []string {
 		"VLLM_",
 	}
 	allowedKeys := map[string]struct{}{
-		"HOME":         {},
-		"LANG":         {},
-		"LC_ALL":       {},
-		"LC_CTYPE":     {},
-		"PATH":         {},
-		"PWD":          {},
-		"SHELL":        {},
-		"TERM":         {},
-		"TMPDIR":       {},
-		"USER":         {},
-		"USERNAME":     {},
-		"VLLM_API_KEY": {},
+		"HOME":                {},
+		"LANG":                {},
+		"LC_ALL":              {},
+		"LC_CTYPE":            {},
+		"ORCH_SUBAGENT_DEPTH": {},
+		"PATH":                {},
+		"PWD":                 {},
+		"SHELL":               {},
+		"TERM":                {},
+		"TMPDIR":              {},
+		"USER":                {},
+		"USERNAME":            {},
+		"VLLM_API_KEY":        {},
 	}
 
 	filtered := make([]string, 0, len(baseEnv))

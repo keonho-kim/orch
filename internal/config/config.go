@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"orch/domain"
+	"github.com/keonho-kim/orch/domain"
 )
 
 const (
@@ -14,6 +14,8 @@ const (
 	bootstrapDirName    = "bootstrap"
 	settingsFileName    = "orch.settings.json"
 	testWorkspaceName   = "test-workspace"
+	localStateDirName   = ".orch"
+	sessionsDirName     = "sessions"
 	appDirName          = "orch"
 	dbFileName          = "state.db"
 )
@@ -26,6 +28,8 @@ type Paths struct {
 	UserConfigDir   string
 	DBPath          string
 	TestWorkspace   string
+	LocalStateDir   string
+	SessionsDir     string
 }
 
 func ResolvePaths(repoRoot string) (Paths, error) {
@@ -43,11 +47,13 @@ func ResolvePaths(repoRoot string) (Paths, error) {
 		UserConfigDir:   userConfigDir,
 		DBPath:          filepath.Join(userConfigDir, dbFileName),
 		TestWorkspace:   filepath.Join(repoRoot, testWorkspaceName),
+		LocalStateDir:   filepath.Join(repoRoot, localStateDirName),
+		SessionsDir:     filepath.Join(repoRoot, localStateDirName, sessionsDirName),
 	}, nil
 }
 
 func EnsureRuntimePaths(paths Paths) error {
-	for _, path := range []string{paths.RuntimeAssetDir, paths.UserConfigDir, paths.TestWorkspace} {
+	for _, path := range []string{paths.RuntimeAssetDir, paths.UserConfigDir, paths.TestWorkspace, paths.LocalStateDir, paths.SessionsDir} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			return fmt.Errorf("create directory %s: %w", path, err)
 		}

@@ -7,8 +7,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"orch/domain"
-	"orch/internal/orchestrator"
+	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/orchestrator"
 )
 
 func (m *Model) openSettings() {

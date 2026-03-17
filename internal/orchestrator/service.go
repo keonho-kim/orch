@@ -10,12 +10,13 @@ import (
 	"sync"
 	"time"
 
-	"orch/domain"
-	"orch/internal/adapters"
-	"orch/internal/config"
-	sqlitestore "orch/internal/store/sqlite"
-	"orch/internal/tooling"
-	"orch/internal/workspace"
+	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/adapters"
+	"github.com/keonho-kim/orch/internal/config"
+	"github.com/keonho-kim/orch/internal/session"
+	sqlitestore "github.com/keonho-kim/orch/internal/store/sqlite"
+	"github.com/keonho-kim/orch/internal/tooling"
+	"github.com/keonho-kim/orch/internal/workspace"
 )
 
 const (
@@ -24,35 +25,47 @@ const (
 )
 
 type Service struct {
-	ctx     context.Context
-	store   *sqlitestore.Store
-	tooling *tooling.Executor
-	paths   config.Paths
-	clients map[domain.Provider]adapters.Client
+	ctx      context.Context
+	store    *sqlitestore.Store
+	tooling  *tooling.Executor
+	paths    config.Paths
+	clients  map[domain.Provider]adapters.Client
+	sessions *session.Service
 
-	mu         sync.RWMutex
-	settings   domain.Settings
-	history    []string
-	runs       map[string]*runState
-	currentRun string
-	lastPrompt string
-	activePlan domain.PlanCache
-	updates    chan UIEvent
+	mu             sync.RWMutex
+	settings       domain.Settings
+	history        []string
+	runs           map[string]*runState
+	currentRun     string
+	lastPrompt     string
+	activePlan     domain.PlanCache
+	currentSession domain.SessionMetadata
+	inheritedCtx   session.Context
+	references     *referenceResolver
+	updates        chan UIEvent
 }
 
 type runState struct {
-	record   domain.RunRecord
-	output   string
-	thinking string
-	draft    string
-	env      []string
-	cancel   context.CancelFunc
-	pending  *approvalState
+	record         domain.RunRecord
+	output         string
+	thinking       string
+	draft          string
+	env            []string
+	cancel         context.CancelFunc
+	pending        *approvalState
+	selectedSkills []selectedSkill
+	resolvedRefs   string
 }
 
 type approvalState struct {
 	request  domain.ApprovalRequest
 	response chan bool
+}
+
+type selectedSkill struct {
+	Name    string
+	Content string
+	Path    string
 }
 
 type UIEvent struct {
@@ -62,7 +75,7 @@ type UIEvent struct {
 
 type Snapshot struct {
 	Settings        domain.Settings
-	History         []string
+	MessageHistory  []string
 	Runs            []domain.RunRecord
 	CurrentRunID    string
 	CurrentOutput   string
@@ -70,6 +83,14 @@ type Snapshot struct {
 	PendingApproval *domain.ApprovalRequest
 	LastPrompt      string
 	ActivePlan      domain.PlanCache
+	CurrentSession  domain.SessionMetadata
+}
+
+type BootOptions struct {
+	RestoreSessionID     string
+	ParentSessionID      string
+	ParentRunID          string
+	InheritParentContext bool
 }
 
 func NewService(
@@ -77,6 +98,7 @@ func NewService(
 	store *sqlitestore.Store,
 	executor *tooling.Executor,
 	paths config.Paths,
+	options BootOptions,
 ) (*Service, error) {
 	service := &Service{
 		ctx:     ctx,
@@ -90,15 +112,24 @@ func NewService(
 		runs:    make(map[string]*runState),
 		updates: make(chan UIEvent, 256),
 	}
+	service.references = newReferenceResolver()
+	service.sessions = session.NewService(session.NewManager(paths.SessionsDir), maintenanceRunner{
+		clients: service.clients,
+		settings: func(provider domain.Provider) domain.ProviderSettings {
+			service.mu.RLock()
+			defer service.mu.RUnlock()
+			return service.settings.ConfigFor(provider)
+		},
+	})
 
-	if err := service.bootstrap(); err != nil {
+	if err := service.bootstrap(options); err != nil {
 		return nil, err
 	}
 
 	return service, nil
 }
 
-func (s *Service) bootstrap() error {
+func (s *Service) bootstrap(options BootOptions) error {
 	settings, err := config.LoadSettings(s.paths)
 	if err != nil {
 		return err
@@ -113,16 +144,42 @@ func (s *Service) bootstrap() error {
 		}
 	}
 
-	historyEntries, err := s.store.ListHistory(s.ctx, historyLimit)
+	historyEntries, err := s.store.ListMessageHistory(s.ctx, historyLimit)
 	if err != nil {
 		return err
 	}
 
-	runRecords, err := s.store.ListRuns(s.ctx, runListLimit)
+	planCache, err := s.store.LoadPlanCache(s.ctx)
 	if err != nil {
 		return err
 	}
-	planCache, err := s.store.LoadPlanCache(s.ctx)
+
+	inheritedCtx, err := s.loadInheritedContext(options)
+	if err != nil {
+		return err
+	}
+
+	var currentSession domain.SessionMetadata
+	if strings.TrimSpace(options.RestoreSessionID) != "" {
+		currentSession, err = s.sessions.LoadMetadata(options.RestoreSessionID)
+		if err != nil {
+			return err
+		}
+	} else {
+		currentSession, err = s.sessions.Create(
+			s.paths.RepoRoot,
+			settings.DefaultProvider,
+			settings.ConfigFor(settings.DefaultProvider).Model,
+			time.Now(),
+			options.ParentSessionID,
+			options.ParentRunID,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	runRecords, err := s.store.ListRunsBySession(s.ctx, currentSession.SessionID, runListLimit)
 	if err != nil {
 		return err
 	}
@@ -132,6 +189,8 @@ func (s *Service) bootstrap() error {
 
 	s.settings = settings
 	s.activePlan = planCache
+	s.currentSession = currentSession
+	s.inheritedCtx = inheritedCtx
 	s.history = make([]string, 0, len(historyEntries))
 	for _, entry := range historyEntries {
 		s.history = append(s.history, entry.Prompt)
@@ -156,6 +215,18 @@ func (s *Service) bootstrap() error {
 	return nil
 }
 
+func (s *Service) loadInheritedContext(options BootOptions) (session.Context, error) {
+	if !options.InheritParentContext || strings.TrimSpace(options.ParentSessionID) == "" {
+		return session.Context{}, nil
+	}
+
+	meta, err := s.sessions.LoadMetadata(options.ParentSessionID)
+	if err != nil {
+		return session.Context{}, err
+	}
+	return s.sessions.Context(meta)
+}
+
 func (s *Service) Events() <-chan UIEvent {
 	return s.updates
 }
@@ -177,12 +248,13 @@ func (s *Service) Snapshot() Snapshot {
 	})
 
 	snapshot := Snapshot{
-		Settings:     s.settings,
-		History:      historyCopy,
-		Runs:         runs,
-		CurrentRunID: s.currentRun,
-		LastPrompt:   s.lastPrompt,
-		ActivePlan:   s.activePlan,
+		Settings:       s.settings,
+		MessageHistory: historyCopy,
+		Runs:           runs,
+		CurrentRunID:   s.currentRun,
+		LastPrompt:     s.lastPrompt,
+		ActivePlan:     s.activePlan,
+		CurrentSession: s.currentSession,
 	}
 
 	if state, ok := s.runs[s.currentRun]; ok {
@@ -195,6 +267,94 @@ func (s *Service) Snapshot() Snapshot {
 	}
 
 	return snapshot
+}
+
+func (s *Service) ListSessions(limit int) ([]domain.SessionMetadata, error) {
+	return s.sessions.ListSessions(limit)
+}
+
+func (s *Service) LatestSessionID() (string, error) {
+	return s.sessions.LatestSessionID()
+}
+
+func (s *Service) RestoreSession(sessionID string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return fmt.Errorf("session id is required")
+	}
+	if s.ActiveRunCount() > 0 {
+		return fmt.Errorf("cannot restore a session while runs are active")
+	}
+
+	meta, err := s.sessions.LoadMetadata(sessionID)
+	if err != nil {
+		return err
+	}
+	runRecords, err := s.store.ListRunsBySession(s.ctx, sessionID, runListLimit)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.currentSession = meta
+	s.currentRun = ""
+	s.lastPrompt = ""
+	s.runs = make(map[string]*runState, len(runRecords))
+	for _, record := range runRecords {
+		record := record
+		s.runs[record.RunID] = &runState{record: record, output: record.FinalOutput, draft: record.FinalOutput}
+	}
+	if len(runRecords) > 0 {
+		s.currentRun = runRecords[0].RunID
+		s.lastPrompt = runRecords[0].Prompt
+	}
+	s.publish(UIEvent{Message: fmt.Sprintf("Restored session %s.", sessionID)})
+	return nil
+}
+
+func (s *Service) OpenNewSession() error {
+	if s.ActiveRunCount() > 0 {
+		return fmt.Errorf("cannot open a new session while runs are active")
+	}
+
+	snapshot := s.Snapshot()
+	settings := snapshot.Settings
+	if settings.DefaultProvider == "" {
+		return fmt.Errorf("default provider is not configured")
+	}
+	model := strings.TrimSpace(settings.ConfigFor(settings.DefaultProvider).Model)
+	if model == "" {
+		return fmt.Errorf("model is not configured for %s", settings.DefaultProvider.DisplayName())
+	}
+
+	newSession, err := s.sessions.Create(s.paths.RepoRoot, settings.DefaultProvider, model, time.Now(), "", "")
+	if err != nil {
+		return err
+	}
+
+	oldSessionID := snapshot.CurrentSession.SessionID
+
+	s.mu.Lock()
+	s.currentSession = newSession
+	s.currentRun = ""
+	s.lastPrompt = ""
+	s.inheritedCtx = session.Context{}
+	s.runs = make(map[string]*runState)
+	s.mu.Unlock()
+
+	s.publish(UIEvent{Message: fmt.Sprintf("Opened new session %s.", newSession.SessionID)})
+	if strings.TrimSpace(oldSessionID) != "" && oldSessionID != newSession.SessionID {
+		go s.finalizeSessionByID(oldSessionID)
+	}
+	return nil
+}
+
+func (s *Service) currentSessionID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.currentSession.SessionID
 }
 
 func (s *Service) NeedsSettingsConfiguration() bool {
@@ -260,7 +420,7 @@ func (s *Service) SubmitPromptMode(prompt string, mode domain.RunMode) (string, 
 		return "", fmt.Errorf("model is not configured for %s", settings.DefaultProvider.DisplayName())
 	}
 
-	if err := s.store.AddHistory(s.ctx, trimmed); err != nil {
+	if err := s.store.AddMessageHistory(s.ctx, trimmed); err != nil {
 		return "", err
 	}
 
@@ -278,10 +438,19 @@ func (s *Service) SubmitPromptMode(prompt string, mode domain.RunMode) (string, 
 	if err != nil {
 		return "", err
 	}
+	selectedSkills, err := resolveSelectedSkills(provisioned.Root, trimmed)
+	if err != nil {
+		return "", err
+	}
+	resolvedReferences, err := s.references.Resolve(provisioned.Root, provisioned.Root, trimmed)
+	if err != nil {
+		return "", err
+	}
 
 	now := time.Now()
 	record := domain.RunRecord{
 		RunID:         runID,
+		SessionID:     s.currentSessionID(),
 		Mode:          parsedMode,
 		Provider:      settings.DefaultProvider,
 		Model:         providerSettings.Model,
@@ -302,12 +471,27 @@ func (s *Service) SubmitPromptMode(prompt string, mode domain.RunMode) (string, 
 	s.history = append([]string{trimmed}, s.history...)
 	s.lastPrompt = trimmed
 	s.currentRun = runID
+	s.currentSession.Provider = settings.DefaultProvider
+	s.currentSession.Model = providerSettings.Model
+	s.currentSession.UpdatedAt = now
+	s.currentSession.LastRunID = runID
 	s.runs[runID] = &runState{
-		record: record,
-		env:    provisioned.Env,
-		cancel: cancel,
+		record:         record,
+		env:            provisioned.Env,
+		cancel:         cancel,
+		selectedSkills: selectedSkills,
+		resolvedRefs:   resolvedReferences,
 	}
+	currentSession := s.currentSession
 	s.mu.Unlock()
+
+	if err := s.sessions.SaveMetadata(currentSession); err != nil {
+		return "", err
+	}
+	if err := s.appendSessionUser(runID, trimmed); err != nil {
+		return "", err
+	}
+	go s.runChatHistoryUserSummary(currentSession, runID, trimmed)
 
 	s.publish(UIEvent{RunID: runID, Message: "Run started."})
 	go s.executeRun(runCtx, runID)

@@ -14,6 +14,7 @@ func TestSanitizeEnvPreservesExpectedKeys(t *testing.T) {
 		"PATH=/usr/bin",
 		"HOME=/Users/test",
 		"VLLM_API_KEY=abc",
+		"ORCH_SUBAGENT_DEPTH=1",
 		"SECRET_TOKEN=skip",
 	})
 
@@ -23,6 +24,9 @@ func TestSanitizeEnvPreservesExpectedKeys(t *testing.T) {
 	}
 	if !strings.Contains(joined, "VLLM_API_KEY=abc") {
 		t.Fatalf("expected vllm api key env to be preserved")
+	}
+	if !strings.Contains(joined, "ORCH_SUBAGENT_DEPTH=1") {
+		t.Fatalf("expected subagent depth env to be preserved")
 	}
 	if strings.Contains(joined, "SECRET_TOKEN=skip") {
 		t.Fatalf("did not expect unrelated secret to be preserved")
@@ -47,15 +51,15 @@ func TestProvisionCopiesBootstrapFilesWithoutClaudeMirror(t *testing.T) {
 		t.Fatalf("mkdir tools: %v", err)
 	}
 	files := map[string]string{
-		filepath.Join(assets, "AGENTS.md"):                  "workspace agents",
-		filepath.Join(assets, "USER.md"):                    "user bootstrap",
-		filepath.Join(assets, "SKILLS.md"):                  "skills bootstrap",
-		filepath.Join(skillDir, "SKILL.md"):                 "skill instructions",
-		filepath.Join(skillDir, "notes.txt"):                "helper notes",
-		filepath.Join(otTools, "read.sh"):                   "#!/usr/bin/env bash\necho read\n",
-		filepath.Join(toolsRoot, "custom.sh"):               "#!/usr/bin/env bash\necho custom\n",
-		product:                                             "product copy",
-		filepath.Join(root, "bootstrap", "USER.md"):         "preserved user memory",
+		filepath.Join(assets, "AGENTS.md"):          "workspace agents",
+		filepath.Join(assets, "USER.md"):            "user bootstrap",
+		filepath.Join(assets, "SKILLS.md"):          "skills bootstrap",
+		filepath.Join(skillDir, "SKILL.md"):         "skill instructions",
+		filepath.Join(skillDir, "notes.txt"):        "helper notes",
+		filepath.Join(otTools, "read.sh"):           "#!/usr/bin/env bash\necho read\n",
+		filepath.Join(toolsRoot, "custom.sh"):       "#!/usr/bin/env bash\necho custom\n",
+		product:                                     "product copy",
+		filepath.Join(root, "bootstrap", "USER.md"): "preserved user memory",
 	}
 	for path, content := range files {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

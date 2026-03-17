@@ -105,13 +105,14 @@ type ProviderCatalog struct {
 }
 
 type Settings struct {
-	DefaultProvider Provider        `json:"default_provider"`
-	Providers       ProviderCatalog `json:"providers"`
-	ApprovalPolicy  ApprovalPolicy  `json:"approval_policy"`
-	SelfDrivingMode bool            `json:"self_driving_mode"`
-	AutoTranslate   bool            `json:"auto_translate"`
-	ReactRalphIter  int             `json:"react_ralph_iter"`
-	PlanRalphIter   int             `json:"plan_ralph_iter"`
+	DefaultProvider   Provider        `json:"default_provider"`
+	Providers         ProviderCatalog `json:"providers"`
+	ApprovalPolicy    ApprovalPolicy  `json:"approval_policy"`
+	SelfDrivingMode   bool            `json:"self_driving_mode"`
+	AutoTranslate     bool            `json:"auto_translate"`
+	ReactRalphIter    int             `json:"react_ralph_iter"`
+	PlanRalphIter     int             `json:"plan_ralph_iter"`
+	CompactThresholdK int             `json:"compact_threshold_k"`
 }
 
 func (s *Settings) Normalize() {
@@ -133,6 +134,9 @@ func (s *Settings) Normalize() {
 	if s.PlanRalphIter <= 0 {
 		s.PlanRalphIter = 3
 	}
+	if s.CompactThresholdK <= 0 {
+		s.CompactThresholdK = 100
+	}
 }
 
 func (s Settings) ConfigFor(provider Provider) ProviderSettings {
@@ -150,7 +154,7 @@ func (s Settings) HasProviderModel(provider Provider) bool {
 	return strings.TrimSpace(s.ConfigFor(provider).Model) != ""
 }
 
-type HistoryEntry struct {
+type MessageHistoryEntry struct {
 	ID        int64
 	Prompt    string
 	CreatedAt time.Time
@@ -158,6 +162,7 @@ type HistoryEntry struct {
 
 type RunRecord struct {
 	RunID          string
+	SessionID      string
 	Mode           RunMode
 	Provider       Provider
 	Model          string
@@ -172,11 +177,70 @@ type RunRecord struct {
 	UpdatedAt      time.Time
 }
 
+type UsageStats struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+type SessionRecordType string
+
+const (
+	SessionRecordUser      SessionRecordType = "user"
+	SessionRecordAssistant SessionRecordType = "assistant"
+	SessionRecordTool      SessionRecordType = "tool"
+	SessionRecordCompact   SessionRecordType = "compact"
+	SessionRecordTitle     SessionRecordType = "title"
+)
+
+type SessionRecord struct {
+	Seq        int64             `json:"seq"`
+	SessionID  string            `json:"session_id"`
+	RunID      string            `json:"run_id,omitempty"`
+	Type       SessionRecordType `json:"type"`
+	Content    string            `json:"content,omitempty"`
+	Title      string            `json:"title,omitempty"`
+	ToolName   string            `json:"tool_name,omitempty"`
+	ToolCallID string            `json:"tool_call_id,omitempty"`
+	ThroughSeq int64             `json:"through_seq,omitempty"`
+	CreatedAt  time.Time         `json:"created_at"`
+	Usage      UsageStats        `json:"usage,omitempty"`
+}
+
+type SessionMetadata struct {
+	SessionID          string     `json:"session_id"`
+	WorkspacePath      string     `json:"workspace_path"`
+	ParentSessionID    string     `json:"parent_session_id,omitempty"`
+	ParentRunID        string     `json:"parent_run_id,omitempty"`
+	Provider           Provider   `json:"provider"`
+	Model              string     `json:"model"`
+	Title              string     `json:"title"`
+	Summary            string     `json:"summary"`
+	StartedAt          time.Time  `json:"started_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	LastSequence       int64      `json:"last_sequence"`
+	LastCompactedSeq   int64      `json:"last_compacted_seq"`
+	TokensSinceCompact int        `json:"tokens_since_compact"`
+	TotalTokens        int        `json:"total_tokens"`
+	FinalizePending    bool       `json:"finalize_pending"`
+	FinalizedAt        *time.Time `json:"finalized_at,omitempty"`
+	LastRunID          string     `json:"last_run_id,omitempty"`
+}
+
+type SubagentResult struct {
+	ChildSessionID string `json:"child_session_id"`
+	ChildRunID     string `json:"child_run_id"`
+	Status         string `json:"status"`
+	FinalOutput    string `json:"final_output"`
+	Truncated      bool   `json:"truncated"`
+	Error          string `json:"error,omitempty"`
+}
+
 type RunEvent struct {
-	RunID      string
-	Kind       string
-	Message    string
-	CreatedAt  time.Time
+	RunID     string
+	Kind      string
+	Message   string
+	CreatedAt time.Time
 }
 
 type ToolCall struct {

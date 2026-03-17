@@ -25,6 +25,7 @@ var migrationStatements = []string{
 	`
 	CREATE TABLE IF NOT EXISTS runs (
 		run_id TEXT PRIMARY KEY,
+		session_id TEXT NOT NULL DEFAULT '',
 		mode TEXT NOT NULL DEFAULT 'react',
 		provider TEXT NOT NULL,
 		model TEXT NOT NULL,
@@ -64,5 +65,8 @@ var migrationStatements = []string{
 	`,
 	`
 	ALTER TABLE runs ADD COLUMN ralph_iteration INTEGER NOT NULL DEFAULT 0
+	`,
+	`
+	ALTER TABLE runs ADD COLUMN session_id TEXT NOT NULL DEFAULT ''
 	`,
 }
