@@ -35,6 +35,10 @@ func (s *Service) ReadChatHistory() (string, error) {
 	return s.manager.ReadChatHistory()
 }
 
+func (s *Service) ReadChatHistoryRecent(limitEntries int, maxBytes int) (string, error) {
+	return s.manager.ReadChatHistoryRecent(limitEntries, maxBytes)
+}
+
 func (s *Service) AppendChatHistory(entry ChatHistoryEntry) error {
 	return s.manager.AppendChatHistory(entry)
 }

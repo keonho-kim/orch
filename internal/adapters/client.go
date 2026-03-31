@@ -250,31 +250,50 @@ func readOpenAICompatibleStream(response *http.Response, onDelta DeltaHandler) (
 	}, nil
 }
 
-func ToolCatalog(mode domain.RunMode) []ToolDefinition {
-	description := "Run one allowed CLI-style command. Prefer `ot read --path <path>` for file content and quick directory inspection, `ot list [--path <path>]` for long listings, and `ot search [--path <path>] [--name <glob>] [--content <pattern>]` for curated search. Use `ot pointer --value <ot-pointer>` to read current-session transcript lines referenced from compact summaries or chatHistory. Use `ot subagent --prompt <task>` when a bounded child run should execute in a separate child session. Use `rg` or `find` directly only when task execution needs behavior outside the curated OT commands. Use `bash tools/<script>.sh ...` only for custom scripts not covered by the curated OT commands. Use direct toolchain commands only when needed for build, test, or task execution."
-	if mode == domain.RunModePlan {
-		description = "Run one plan-mode command. Only `cd <path>`, `ot read --path <path>`, `ot list [--path <path>]`, and `ot search [--path <path>] [--name <glob>] [--content <pattern>]` are allowed."
+func ToolCatalog(mode domain.RunMode, role domain.AgentRole) []ToolDefinition {
+	allowedOps := []string{"read", "list", "search"}
+	description := "Run one OT operation. Allowed operations in this mode are read, list, and search."
+	if mode != domain.RunModePlan {
+		if role == domain.AgentRoleWorker {
+			allowedOps = []string{"read", "list", "search", "write", "patch", "check", "complete", "fail"}
+			description = "Run one worker OT operation. Allowed operations are read, list, search, write, patch, check, complete, and fail."
+		} else {
+			allowedOps = []string{"delegate", "read", "list", "search"}
+			description = "Run one gateway OT operation. Allowed operations are delegate, read, list, and search."
+		}
 	}
+
 	return []ToolDefinition{
-		newTool("exec", description, map[string]any{
+		newTool("ot", description, map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"command": map[string]any{"type": "string"},
-				"args": map[string]any{
-					"type":  "array",
-					"items": map[string]any{"type": "string"},
+				"op": map[string]any{
+					"type": "string",
+					"enum": allowedOps,
 				},
-				"cwd":         map[string]any{"type": "string"},
-				"timeout_sec": map[string]any{"type": "integer"},
-				"stdin":       map[string]any{"type": "string"},
+				"path":            map[string]any{"type": "string"},
+				"start_line":      map[string]any{"type": "integer"},
+				"end_line":        map[string]any{"type": "integer"},
+				"name_pattern":    map[string]any{"type": "string"},
+				"content_pattern": map[string]any{"type": "string"},
+				"content":         map[string]any{"type": "string"},
+				"patch":           map[string]any{"type": "string"},
+				"check": map[string]any{
+					"type": "string",
+					"enum": []string{"go_test", "go_vet", "golangci_lint"},
+				},
+				"task_id":       map[string]any{"type": "string"},
+				"task_title":    map[string]any{"type": "string"},
+				"task_contract": map[string]any{"type": "string"},
+				"message":       map[string]any{"type": "string"},
 			},
-			"required": []string{"command"},
+			"required": []string{"op"},
 		}),
 	}
 }
 
-func ToolSummary(mode domain.RunMode) string {
-	tools := ToolCatalog(mode)
+func ToolSummary(mode domain.RunMode, role domain.AgentRole) string {
+	tools := ToolCatalog(mode, role)
 	if len(tools) == 0 {
 		return "(none)"
 	}

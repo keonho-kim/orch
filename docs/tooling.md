@@ -1,67 +1,45 @@
 # Tooling
 
-## Model-Facing Surface
+## Model-Facing Contract
 
-The model receives one structured callable tool: `exec`.
+The model receives one structured callable tool: `ot`.
 
-`exec` is the transport contract.
+`exec` is no longer part of the model-facing contract.
 
-Inside `exec`, `orch` exposes one built-in CLI surface: `ot`.
+`bootstrap/TOOLS.md` is the text-form tool guide used for prompting.
 
-## ReAct vs Plan
+## Role-Specific OT Operations
 
-| Mode | Allowed behavior |
-| --- | --- |
-| `ReAct` | full approved local command surface |
-| `Plan` | `cd`, `ot read`, `ot list`, `ot search` only |
+### Gateway
 
-## Built-in CLI Surface: `ot`
+- `delegate`
+- `read`
+- `list`
+- `search`
 
-| Command | Purpose |
-| --- | --- |
-| `ot read --path <path>` | file content or quick directory inspection |
-| `ot list [--path <path>]` | long listing |
-| `ot search [--path <path>] [--name <glob>] [--content <pattern>]` | curated name/content search |
-| `ot pointer --value <ot-pointer>` | resolve current-session JSONL line references |
-| `ot subagent --prompt "<task>"` | bounded child ReAct session |
+### Worker
 
-## Approval Rules
+- `read`
+- `list`
+- `search`
+- `write`
+- `patch`
+- `check`
+- `complete`
+- `fail`
 
-| Case | Approval |
-| --- | --- |
-| workspace `ot read/list/search` | auto-allowed |
-| external read-only OT access | approval required |
-| `ot write` | approval required |
-| `ot subagent` | approval required unless self-driving mode is enabled |
-| `rm`, `mv` | always approval-gated |
+### Plan Mode
 
-## Pointer Semantics
+Plan mode is read-only:
 
-`ot pointer` is intentionally limited:
-
-- current session only
-- no cross-session transcript traversal
-- reads referenced JSONL lines by pointer value
-
-Example:
-
-```text
-ot pointer --value ot-pointer://current?lines=22,23
-```
-
-## Reference Syntax in User Prompts
-
-These are not direct OT commands, but they influence prompt assembly:
-
-| Syntax | Meaning |
-| --- | --- |
-| `@filename` | resolve a workspace file |
-| `#dir-name` | resolve a workspace directory |
-| `$<skill-name>` | force explicit skill selection |
+- `read`
+- `list`
+- `search`
 
 ## Notes
 
-- structured tool schema is always sent on provider calls
-- a concise text tool summary is also injected into prompt context
-- `ot pointer` and `ot subagent` are `ot` subcommands, not separate model-facing tools
-- `ot` remains the policy boundary for most model-driven local interaction
+- The model no longer authors raw shell commands.
+- The model no longer controls `cwd`, `stdin`, or freeform argv.
+- Writes, patches, and checks are explicit worker operations.
+- Gateway delegation uses child worker runs under the hood.
+- Standalone `ot` still exists as a CLI binary, but the model-facing tool contract is the structured `ot` schema.

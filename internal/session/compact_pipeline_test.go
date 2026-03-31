@@ -32,7 +32,7 @@ func TestCompactProducesOrderedPointerAwareSummary(t *testing.T) {
 	manager := NewManager(filepath.Join(t.TempDir(), ".orch", "sessions"))
 	service := NewService(manager, compactRunnerStub{})
 
-	meta, err := manager.Create("/repo", domain.ProviderOllama, "model", time.Now(), "", "")
+	meta, err := manager.Create("/repo", domain.ProviderOllama, "model", time.Now(), "", "", "", domain.AgentRoleGateway, "", "", "")
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}

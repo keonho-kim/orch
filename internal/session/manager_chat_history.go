@@ -28,6 +28,30 @@ func (m *Manager) ReadChatHistory() (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
+func (m *Manager) ReadChatHistoryRecent(limitEntries int, maxBytes int) (string, error) {
+	content, err := m.ReadChatHistory()
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(content) == "" {
+		return "", nil
+	}
+
+	entries := splitChatHistoryEntries(content)
+	if limitEntries > 0 && len(entries) > limitEntries {
+		entries = entries[len(entries)-limitEntries:]
+	}
+	for len(entries) > 1 && maxBytes > 0 && len(joinChatHistoryEntries(entries)) > maxBytes {
+		entries = entries[1:]
+	}
+
+	joined := joinChatHistoryEntries(entries)
+	if maxBytes > 0 && len(joined) > maxBytes {
+		joined = strings.TrimSpace(joined[len(joined)-maxBytes:])
+	}
+	return joined, nil
+}
+
 func (m *Manager) AppendChatHistory(entry ChatHistoryEntry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -95,4 +119,31 @@ func formatChatHistoryEntry(
 	}
 	builder.WriteString("\n\n")
 	return builder.String()
+}
+
+func splitChatHistoryEntries(content string) []string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil
+	}
+	parts := strings.Split(content, "\n## ")
+	entries := make([]string, 0, len(parts))
+	for index, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if index > 0 {
+			part = "## " + part
+		}
+		entries = append(entries, part)
+	}
+	return entries
+}
+
+func joinChatHistoryEntries(entries []string) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	return strings.Join(entries, "\n\n")
 }

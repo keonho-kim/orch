@@ -72,6 +72,39 @@ func ParseRunMode(value string) (RunMode, error) {
 	}
 }
 
+type AgentRole string
+
+const (
+	AgentRoleGateway AgentRole = "gateway"
+	AgentRoleWorker  AgentRole = "worker"
+)
+
+func (r AgentRole) String() string {
+	return string(r)
+}
+
+func (r AgentRole) DisplayName() string {
+	switch r {
+	case AgentRoleWorker:
+		return "Worker"
+	case AgentRoleGateway, "":
+		return "Gateway"
+	default:
+		return strings.ToUpper(string(r))
+	}
+}
+
+func ParseAgentRole(value string) (AgentRole, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", string(AgentRoleGateway):
+		return AgentRoleGateway, nil
+	case string(AgentRoleWorker):
+		return AgentRoleWorker, nil
+	default:
+		return "", fmt.Errorf("unsupported agent role %q", value)
+	}
+}
+
 type RunStatus string
 
 const (
@@ -109,7 +142,6 @@ type Settings struct {
 	Providers         ProviderCatalog `json:"providers"`
 	ApprovalPolicy    ApprovalPolicy  `json:"approval_policy"`
 	SelfDrivingMode   bool            `json:"self_driving_mode"`
-	AutoTranslate     bool            `json:"auto_translate"`
 	ReactRalphIter    int             `json:"react_ralph_iter"`
 	PlanRalphIter     int             `json:"plan_ralph_iter"`
 	CompactThresholdK int             `json:"compact_threshold_k"`
@@ -164,6 +196,7 @@ type RunRecord struct {
 	RunID          string
 	SessionID      string
 	Mode           RunMode
+	AgentRole      AgentRole
 	Provider       Provider
 	Model          string
 	Prompt         string
@@ -212,6 +245,11 @@ type SessionMetadata struct {
 	WorkspacePath      string     `json:"workspace_path"`
 	ParentSessionID    string     `json:"parent_session_id,omitempty"`
 	ParentRunID        string     `json:"parent_run_id,omitempty"`
+	ParentTaskID       string     `json:"parent_task_id,omitempty"`
+	WorkerRole         AgentRole  `json:"worker_role,omitempty"`
+	TaskTitle          string     `json:"task_title,omitempty"`
+	TaskContract       string     `json:"task_contract,omitempty"`
+	TaskStatus         string     `json:"task_status,omitempty"`
 	Provider           Provider   `json:"provider"`
 	Model              string     `json:"model"`
 	Title              string     `json:"title"`
@@ -230,6 +268,10 @@ type SessionMetadata struct {
 type SubagentResult struct {
 	ChildSessionID string `json:"child_session_id"`
 	ChildRunID     string `json:"child_run_id"`
+	TaskID         string `json:"task_id,omitempty"`
+	TaskTitle      string `json:"task_title,omitempty"`
+	TaskStatus     string `json:"task_status,omitempty"`
+	WorkerRole     string `json:"worker_role,omitempty"`
 	Status         string `json:"status"`
 	FinalOutput    string `json:"final_output"`
 	Truncated      bool   `json:"truncated"`
@@ -255,6 +297,28 @@ type ExecRequest struct {
 	Cwd        string   `json:"cwd,omitempty"`
 	TimeoutSec int      `json:"timeout_sec,omitempty"`
 	Stdin      string   `json:"stdin,omitempty"`
+}
+
+type OTRequest struct {
+	Op             string `json:"op"`
+	Path           string `json:"path,omitempty"`
+	StartLine      int    `json:"start_line,omitempty"`
+	EndLine        int    `json:"end_line,omitempty"`
+	NamePattern    string `json:"name_pattern,omitempty"`
+	ContentPattern string `json:"content_pattern,omitempty"`
+	Content        string `json:"content,omitempty"`
+	Patch          string `json:"patch,omitempty"`
+	Check          string `json:"check,omitempty"`
+	TaskID         string `json:"task_id,omitempty"`
+	TaskTitle      string `json:"task_title,omitempty"`
+	TaskContract   string `json:"task_contract,omitempty"`
+	Message        string `json:"message,omitempty"`
+}
+
+type SubagentTask struct {
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Contract string `json:"contract"`
 }
 
 type ToolResult struct {

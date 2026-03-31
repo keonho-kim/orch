@@ -19,7 +19,6 @@ type ollamaURLMode int
 const (
 	fieldProvider settingsField = iota
 	fieldSelfDriving
-	fieldAutoTranslate
 	fieldOllamaBaseURL
 	fieldOllamaModel
 	fieldVLLMBaseURL
@@ -70,12 +69,11 @@ type providerChangeConfirmation struct {
 }
 
 type settingsFormState struct {
-	provider      domain.Provider
-	selfDriving   bool
-	autoTranslate bool
-	focus         settingsField
-	inputs        map[settingsField]textinput.Model
-	confirmation  *providerChangeConfirmation
+	provider     domain.Provider
+	selfDriving  bool
+	focus        settingsField
+	inputs       map[settingsField]textinput.Model
+	confirmation *providerChangeConfirmation
 }
 
 type settingsSetupState struct {
@@ -97,7 +95,6 @@ type settingsModalState struct {
 
 var settingsFieldOrder = []settingsField{
 	fieldSelfDriving,
-	fieldAutoTranslate,
 	fieldProvider,
 	fieldOllamaBaseURL,
 	fieldOllamaModel,
@@ -124,7 +121,6 @@ var settingsFieldGroupTitles = map[settingsFieldGroup]string{
 var settingsFieldSpecs = map[settingsField]settingsFieldSpec{
 	fieldProvider:         {label: "Provider", kind: settingsFieldKindProvider, group: settingsFieldGroupProvider, visible: alwaysVisibleSettingsField},
 	fieldSelfDriving:      {label: "Self-Driving Mode", kind: settingsFieldKindToggle, group: settingsFieldGroupGeneral, visible: alwaysVisibleSettingsField},
-	fieldAutoTranslate:    {label: "Auto Translate", kind: settingsFieldKindToggle, group: settingsFieldGroupGeneral, visible: alwaysVisibleSettingsField},
 	fieldOllamaBaseURL:    {label: "Ollama Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider, visible: providerSettingsField(domain.ProviderOllama)},
 	fieldOllamaModel:      {label: "Ollama Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider, visible: providerSettingsField(domain.ProviderOllama)},
 	fieldVLLMBaseURL:      {label: "vLLM Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider, visible: providerSettingsField(domain.ProviderVLLM)},
@@ -163,11 +159,10 @@ func newSetupSettingsModal(settings domain.Settings) settingsModalState {
 func newSettingsFormState(settings domain.Settings) settingsFormState {
 	settings.Normalize()
 	state := settingsFormState{
-		provider:      settings.DefaultProvider,
-		selfDriving:   settings.SelfDrivingMode,
-		autoTranslate: settings.AutoTranslate,
-		focus:         fieldProvider,
-		inputs:        make(map[settingsField]textinput.Model),
+		provider:    settings.DefaultProvider,
+		selfDriving: settings.SelfDrivingMode,
+		focus:       fieldProvider,
+		inputs:      make(map[settingsField]textinput.Model),
 	}
 	if state.provider == "" {
 		state.provider = domain.ProviderOllama
@@ -368,7 +363,6 @@ func (s settingsFormState) buildSettings(base domain.Settings) domain.Settings {
 	settings.Providers.VLLM.Model = strings.TrimSpace(s.inputs[fieldVLLMModel].Value())
 	settings.Providers.VLLM.APIKeyEnv = strings.TrimSpace(s.inputs[fieldVLLMAPIKeyEnv].Value())
 	settings.SelfDrivingMode = s.selfDriving
-	settings.AutoTranslate = s.autoTranslate
 	settings.ReactRalphIter = parsePositiveInt(s.inputs[fieldReactRalphIter].Value(), settings.ReactRalphIter)
 	settings.PlanRalphIter = parsePositiveInt(s.inputs[fieldPlanRalphIter].Value(), settings.PlanRalphIter)
 	settings.CompactThresholdK = parsePositiveInt(s.inputs[fieldCompactThreshold].Value(), settings.CompactThresholdK)

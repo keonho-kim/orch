@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -25,12 +24,13 @@ const (
 )
 
 type Service struct {
-	ctx      context.Context
-	store    *sqlitestore.Store
-	tooling  *tooling.Executor
-	paths    config.Paths
-	clients  map[domain.Provider]adapters.Client
-	sessions *session.Service
+	ctx       context.Context
+	store     *sqlitestore.Store
+	tooling   *tooling.Executor
+	paths     config.Paths
+	agentRole domain.AgentRole
+	clients   map[domain.Provider]adapters.Client
+	sessions  *session.Service
 
 	mu             sync.RWMutex
 	settings       domain.Settings
@@ -90,6 +90,11 @@ type BootOptions struct {
 	RestoreSessionID     string
 	ParentSessionID      string
 	ParentRunID          string
+	ParentTaskID         string
+	TaskTitle            string
+	TaskContract         string
+	TaskStatus           string
+	AgentRole            domain.AgentRole
 	InheritParentContext bool
 }
 
@@ -101,10 +106,11 @@ func NewService(
 	options BootOptions,
 ) (*Service, error) {
 	service := &Service{
-		ctx:     ctx,
-		store:   store,
-		tooling: executor,
-		paths:   paths,
+		ctx:       ctx,
+		store:     store,
+		tooling:   executor,
+		paths:     paths,
+		agentRole: normalizeAgentRole(options.AgentRole),
 		clients: map[domain.Provider]adapters.Client{
 			domain.ProviderOllama: adapters.NewOllamaClient(),
 			domain.ProviderVLLM:   adapters.NewVLLMClient(),
@@ -127,6 +133,13 @@ func NewService(
 	}
 
 	return service, nil
+}
+
+func normalizeAgentRole(role domain.AgentRole) domain.AgentRole {
+	if parsed, err := domain.ParseAgentRole(role.String()); err == nil {
+		return parsed
+	}
+	return domain.AgentRoleGateway
 }
 
 func (s *Service) bootstrap(options BootOptions) error {
@@ -173,10 +186,18 @@ func (s *Service) bootstrap(options BootOptions) error {
 			time.Now(),
 			options.ParentSessionID,
 			options.ParentRunID,
+			options.ParentTaskID,
+			s.agentRole,
+			options.TaskTitle,
+			options.TaskContract,
+			options.TaskStatus,
 		)
 		if err != nil {
 			return err
 		}
+	}
+	if currentSession.WorkerRole == "" {
+		currentSession.WorkerRole = s.agentRole
 	}
 
 	runRecords, err := s.store.ListRunsBySession(s.ctx, currentSession.SessionID, runListLimit)
@@ -205,6 +226,7 @@ func (s *Service) bootstrap(options BootOptions) error {
 			_ = s.store.UpdateRun(s.ctx, record)
 		}
 		s.runs[record.RunID] = &runState{record: record, output: record.FinalOutput, draft: record.FinalOutput}
+		s.runs[record.RunID].record.AgentRole = s.agentRole
 	}
 
 	if len(runRecords) > 0 {
@@ -328,7 +350,19 @@ func (s *Service) OpenNewSession() error {
 		return fmt.Errorf("model is not configured for %s", settings.DefaultProvider.DisplayName())
 	}
 
-	newSession, err := s.sessions.Create(s.paths.RepoRoot, settings.DefaultProvider, model, time.Now(), "", "")
+	newSession, err := s.sessions.Create(
+		s.paths.RepoRoot,
+		settings.DefaultProvider,
+		model,
+		time.Now(),
+		"",
+		"",
+		"",
+		s.agentRole,
+		"",
+		"",
+		"",
+	)
 	if err != nil {
 		return err
 	}
@@ -432,7 +466,6 @@ func (s *Service) SubmitPromptMode(prompt string, mode domain.RunMode) (string, 
 	provisioned, err := workspace.Provision(
 		s.paths.TestWorkspace,
 		s.paths.BootstrapAssets,
-		filepath.Join(s.paths.RepoRoot, "PRODUCT.md"),
 		os.Environ(),
 	)
 	if err != nil {
@@ -452,6 +485,7 @@ func (s *Service) SubmitPromptMode(prompt string, mode domain.RunMode) (string, 
 		RunID:         runID,
 		SessionID:     s.currentSessionID(),
 		Mode:          parsedMode,
+		AgentRole:     s.agentRole,
 		Provider:      settings.DefaultProvider,
 		Model:         providerSettings.Model,
 		Prompt:        trimmed,
@@ -475,6 +509,10 @@ func (s *Service) SubmitPromptMode(prompt string, mode domain.RunMode) (string, 
 	s.currentSession.Model = providerSettings.Model
 	s.currentSession.UpdatedAt = now
 	s.currentSession.LastRunID = runID
+	s.currentSession.WorkerRole = s.agentRole
+	if s.agentRole == domain.AgentRoleWorker {
+		s.currentSession.TaskStatus = "running"
+	}
 	s.runs[runID] = &runState{
 		record:         record,
 		env:            provisioned.Env,
@@ -490,6 +528,11 @@ func (s *Service) SubmitPromptMode(prompt string, mode domain.RunMode) (string, 
 	}
 	if err := s.appendSessionUser(runID, trimmed); err != nil {
 		return "", err
+	}
+	if s.agentRole == domain.AgentRoleWorker {
+		if err := s.updateCurrentSessionTaskStatus("running"); err != nil {
+			return "", err
+		}
 	}
 	go s.runChatHistoryUserSummary(currentSession, runID, trimmed)
 
@@ -629,6 +672,25 @@ func (s *Service) saveActivePlan(cache domain.PlanCache) error {
 	s.mu.Unlock()
 	s.publish(UIEvent{Message: "Plan cache updated."})
 	return nil
+}
+
+func (s *Service) updateCurrentSessionTaskStatus(status string) error {
+	status = strings.TrimSpace(status)
+	if status == "" {
+		return nil
+	}
+
+	s.mu.Lock()
+	meta := s.currentSession
+	if meta.WorkerRole == "" {
+		meta.WorkerRole = s.agentRole
+	}
+	meta.TaskStatus = status
+	meta.UpdatedAt = time.Now()
+	s.currentSession = meta
+	s.mu.Unlock()
+
+	return s.sessions.SaveMetadata(meta)
 }
 
 func isTerminalStatus(status domain.RunStatus) bool {

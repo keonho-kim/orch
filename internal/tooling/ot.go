@@ -3,11 +3,13 @@ package tooling
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/keonho-kim/orch/domain"
 	"github.com/keonho-kim/orch/internal/session"
@@ -163,8 +165,29 @@ func (r *OTRunner) runSubagent(
 	env []string,
 	inspection otInspection,
 ) (string, error) {
+	title := strings.TrimSpace(inspection.Prompt)
+	if len(title) > 72 {
+		title = title[:72]
+	}
+	return r.RunDelegateTask(ctx, workspaceRoot, record, env, domain.SubagentTask{
+		ID:       fmt.Sprintf("task-%d", time.Now().UnixNano()),
+		Title:    title,
+		Contract: inspection.Prompt,
+	})
+}
+
+func (r *OTRunner) RunDelegateTask(
+	ctx context.Context,
+	workspaceRoot string,
+	record domain.RunRecord,
+	env []string,
+	task domain.SubagentTask,
+) (string, error) {
 	if subagentDepth(env) > 0 {
 		return "", fmt.Errorf("nested ot subagent runs are not allowed")
+	}
+	if strings.TrimSpace(task.Contract) == "" {
+		return "", fmt.Errorf("subagent task contract is required")
 	}
 
 	repoRoot, err := resolveSubagentRepoRoot(workspaceRoot)
@@ -185,6 +208,10 @@ func (r *OTRunner) runSubagent(
 	if parentRunID == "" {
 		parentRunID = subagentPlaceholder
 	}
+	encodedTask, err := json.Marshal(task)
+	if err != nil {
+		return "", fmt.Errorf("marshal subagent task: %w", err)
+	}
 
 	request := domain.ExecRequest{
 		Command: executable,
@@ -193,7 +220,7 @@ func (r *OTRunner) runSubagent(
 			repoRoot,
 			parentSessionID,
 			parentRunID,
-			inspection.Prompt,
+			string(encodedTask),
 		},
 		Cwd: requestCwdOrWorkspace(record),
 	}

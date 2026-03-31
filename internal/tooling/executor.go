@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -24,19 +25,28 @@ type Execution struct {
 	RequiresApproval bool
 	Reason           string
 	NextCwd          string
+	TerminalStatus   domain.RunStatus
+	TerminalMessage  string
 }
 
 func NewExecutor() *Executor {
 	return &Executor{ot: NewOTRunner()}
 }
 
+func (e *Executor) DecodeOTRequest(call domain.ToolCall) (domain.OTRequest, error) {
+	return decodeOTRequest(call)
+}
+
 func (e *Executor) Review(workspaceRoot string, record domain.RunRecord, env []string, settings domain.Settings, call domain.ToolCall) (Execution, error) {
-	request, err := decodeExecRequest(call)
+	request, err := decodeOTRequest(call)
 	if err != nil {
 		return Execution{}, err
 	}
+	if err := validateOTRequest(record, request); err != nil {
+		return Execution{}, err
+	}
 
-	requiresApproval, reason, err := classifyApproval(workspaceRoot, record, env, settings, request)
+	requiresApproval, reason, err := classifyOTApproval(record, settings, request)
 	if err != nil {
 		return Execution{}, err
 	}
@@ -47,186 +57,340 @@ func (e *Executor) Review(workspaceRoot string, record domain.RunRecord, env []s
 }
 
 func (e *Executor) Execute(ctx context.Context, workspaceRoot string, record domain.RunRecord, env []string, call domain.ToolCall) (Execution, error) {
-	request, err := decodeExecRequest(call)
+	request, err := decodeOTRequest(call)
 	if err != nil {
 		return Execution{}, err
 	}
-
-	if err := validateModeCommand(workspaceRoot, record, request); err != nil {
+	if err := validateOTRequest(record, request); err != nil {
 		return Execution{}, err
 	}
 
-	if request.Command == "cd" {
-		nextCwd, err := resolveCommandPath(workspaceRoot, baseCwd(record), firstArg(request.Args))
+	switch strings.TrimSpace(request.Op) {
+	case "read":
+		return e.executeRead(ctx, workspaceRoot, record, env, request)
+	case "list":
+		return e.executeList(ctx, workspaceRoot, record, env, request)
+	case "search":
+		return e.executeSearch(ctx, workspaceRoot, record, env, request)
+	case "write":
+		return e.executeWrite(ctx, workspaceRoot, record, env, request)
+	case "patch":
+		return e.executePatch(ctx, workspaceRoot, record, env, request)
+	case "check":
+		return e.executeCheck(ctx, workspaceRoot, record, env, request)
+	case "delegate":
+		output, err := e.ot.RunDelegateTask(ctx, workspaceRoot, record, env, domain.SubagentTask{
+			ID:       normalizeTaskID(request),
+			Title:    strings.TrimSpace(request.TaskTitle),
+			Contract: strings.TrimSpace(request.TaskContract),
+		})
 		if err != nil {
 			return Execution{}, err
+		}
+		return Execution{Output: output}, nil
+	case "complete":
+		message := strings.TrimSpace(request.Message)
+		if message == "" {
+			message = "Worker task completed."
 		}
 		return Execution{
-			Output:  fmt.Sprintf("Changed directory to %s", displayRelativePath(workspaceRoot, nextCwd)),
-			NextCwd: nextCwd,
+			Output:          message,
+			TerminalStatus:  domain.StatusCompleted,
+			TerminalMessage: message,
 		}, nil
-	}
-
-	switch request.Command {
-	case "ot":
-		output, err := e.ot.Run(ctx, workspaceRoot, record, env, request)
-		if err != nil {
-			return Execution{}, err
+	case "fail":
+		message := strings.TrimSpace(request.Message)
+		if message == "" {
+			message = "Worker task failed."
 		}
-		return Execution{Output: output}, nil
-	case "bash":
-		if err := validateCustomScript(workspaceRoot, request); err != nil {
-			return Execution{}, err
-		}
-		output, err := runExternal(ctx, workspaceRoot, record, env, request)
-		if err != nil {
-			return Execution{}, err
-		}
-		return Execution{Output: output}, nil
+		return Execution{
+			Output:          message,
+			TerminalStatus:  domain.StatusFailed,
+			TerminalMessage: message,
+		}, nil
 	default:
-		if !allowedDirectCommands()[request.Command] {
-			return Execution{}, fmt.Errorf("command %q is not allowlisted", request.Command)
-		}
-		output, err := runExternal(ctx, workspaceRoot, record, env, request)
-		if err != nil {
-			return Execution{}, err
-		}
-		return Execution{Output: output}, nil
+		return Execution{}, fmt.Errorf("unsupported ot op %q", request.Op)
 	}
 }
 
-func classifyApproval(workspaceRoot string, record domain.RunRecord, env []string, settings domain.Settings, request domain.ExecRequest) (bool, string, error) {
-	if err := validateModeCommand(workspaceRoot, record, request); err != nil {
-		return false, "", err
+func decodeOTRequest(call domain.ToolCall) (domain.OTRequest, error) {
+	if call.Name != "ot" {
+		return domain.OTRequest{}, fmt.Errorf("unsupported tool %q", call.Name)
+	}
+
+	var request domain.OTRequest
+	if err := json.Unmarshal([]byte(call.Arguments), &request); err != nil {
+		return domain.OTRequest{}, fmt.Errorf("decode ot request: %w", err)
+	}
+	request.Op = strings.TrimSpace(strings.ToLower(request.Op))
+	if request.Op == "" {
+		return domain.OTRequest{}, fmt.Errorf("ot.op is required")
+	}
+	if request.StartLine < 0 || request.EndLine < 0 {
+		return domain.OTRequest{}, fmt.Errorf("line ranges must be >= 0")
+	}
+	return request, nil
+}
+
+func validateOTRequest(record domain.RunRecord, request domain.OTRequest) error {
+	role := normalizeRecordRole(record)
+	op := strings.TrimSpace(request.Op)
+	if op == "" {
+		return fmt.Errorf("ot.op is required")
 	}
 
 	if record.Mode == domain.RunModePlan {
-		return false, "", nil
-	}
-
-	if isBlockedDestructiveCommand(request) {
-		return true, "rm and mv always require approval.", nil
-	}
-
-	switch request.Command {
-	case "ot":
-		return classifyOTApproval(workspaceRoot, record, env, settings, request)
-	case "bash":
-		if err := validateCustomScript(workspaceRoot, request); err != nil {
-			return false, "", err
-		}
-		if settings.SelfDrivingMode {
-			return false, "", nil
-		}
-		return true, "Custom tools/*.sh scripts require approval.", nil
-	default:
-		if !allowedDirectCommands()[request.Command] {
-			return false, "", fmt.Errorf("command %q is not allowlisted", request.Command)
-		}
-		if settings.SelfDrivingMode {
-			return false, "", nil
-		}
-		return true, fmt.Sprintf("Command %s requires approval.", request.Command), nil
-	}
-}
-
-func validateModeCommand(workspaceRoot string, record domain.RunRecord, request domain.ExecRequest) error {
-	if record.Mode != domain.RunModePlan {
-		return nil
-	}
-
-	switch request.Command {
-	case "cd":
-		if len(request.Args) != 1 {
-			return fmt.Errorf("plan mode cd requires exactly one path argument")
-		}
-		_, err := resolveCommandPath(workspaceRoot, baseCwd(record), request.Args[0])
-		return err
-	case "ot":
-		if len(request.Args) == 0 {
-			return fmt.Errorf("plan mode only allows ot read, ot list, and ot search")
-		}
-		switch strings.TrimSpace(request.Args[0]) {
+		switch op {
 		case "read", "list", "search":
+			return validatePathRequest(op, request)
+		default:
+			return fmt.Errorf("plan mode only allows read, list, and search operations")
+		}
+	}
+
+	switch role {
+	case domain.AgentRoleWorker:
+		switch op {
+		case "read", "list", "search":
+			return validatePathRequest(op, request)
+		case "write":
+			if strings.TrimSpace(request.Path) == "" {
+				return fmt.Errorf("write requires path")
+			}
+			if request.Content == "" {
+				return fmt.Errorf("write requires content")
+			}
+			return nil
+		case "patch":
+			if strings.TrimSpace(request.Patch) == "" {
+				return fmt.Errorf("patch requires patch content")
+			}
+			return nil
+		case "check":
+			switch strings.TrimSpace(request.Check) {
+			case "go_test", "go_vet", "golangci_lint":
+				return nil
+			default:
+				return fmt.Errorf("unsupported check %q", request.Check)
+			}
+		case "complete", "fail":
 			return nil
 		default:
-			return fmt.Errorf("plan mode only allows ot read, ot list, and ot search")
+			return fmt.Errorf("worker role does not allow ot op %q", request.Op)
 		}
 	default:
-		return fmt.Errorf("plan mode only allows cd, ot read, ot list, and ot search")
+		switch op {
+		case "delegate":
+			if strings.TrimSpace(request.TaskContract) == "" {
+				return fmt.Errorf("delegate requires task_contract")
+			}
+			if strings.TrimSpace(request.TaskTitle) == "" {
+				return fmt.Errorf("delegate requires task_title")
+			}
+			return nil
+		case "read", "list", "search":
+			return validatePathRequest(op, request)
+		default:
+			return fmt.Errorf("gateway role does not allow ot op %q", request.Op)
+		}
 	}
 }
 
-func classifyOTApproval(workspaceRoot string, record domain.RunRecord, env []string, settings domain.Settings, request domain.ExecRequest) (bool, string, error) {
-	inspection, err := inspectOTRequest(workspaceRoot, record, request)
-	if err != nil {
-		return false, "", err
+func validatePathRequest(op string, request domain.OTRequest) error {
+	if op != "list" && strings.TrimSpace(request.Path) == "" {
+		return fmt.Errorf("%s requires path", op)
 	}
+	if op == "search" && strings.TrimSpace(request.NamePattern) == "" && strings.TrimSpace(request.ContentPattern) == "" {
+		return fmt.Errorf("search requires name_pattern or content_pattern")
+	}
+	if op == "read" && request.EndLine > 0 && request.StartLine > request.EndLine {
+		return fmt.Errorf("start_line must be <= end_line")
+	}
+	return nil
+}
 
-	switch inspection.Subcommand {
-	case "read", "list", "search":
-		if inspection.WithinWorkspace {
-			return false, "", nil
-		}
-		return true, fmt.Sprintf(otSearchReasonOutside, inspection.Subcommand), nil
-	case "pointer":
+func classifyOTApproval(record domain.RunRecord, settings domain.Settings, request domain.OTRequest) (bool, string, error) {
+	switch request.Op {
+	case "read", "list", "search", "delegate", "complete", "fail":
 		return false, "", nil
 	case "write":
 		return true, "ot write requires approval.", nil
-	case "subagent":
-		if subagentDepth(env) > 0 {
-			return false, "", fmt.Errorf("nested ot subagent runs are not allowed")
-		}
-		if settings.SelfDrivingMode {
+	case "patch":
+		return true, "ot patch requires approval.", nil
+	case "check":
+		if settings.SelfDrivingMode && normalizeRecordRole(record) == domain.AgentRoleWorker {
 			return false, "", nil
 		}
-		return true, "ot subagent requires approval.", nil
+		return true, "ot check requires approval.", nil
 	default:
-		if settings.SelfDrivingMode {
-			return false, "", nil
-		}
-		return true, fmt.Sprintf("ot %s requires approval.", inspection.Subcommand), nil
+		return false, "", fmt.Errorf("unsupported ot op %q", request.Op)
 	}
 }
 
-func isBlockedDestructiveCommand(request domain.ExecRequest) bool {
-	switch request.Command {
-	case "rm", "mv":
-		return true
-	case "ot":
-		if len(request.Args) == 0 {
-			return false
-		}
-		if strings.TrimSpace(request.Args[0]) != "exec" || len(request.Args) < 2 {
-			return false
-		}
-		command := strings.TrimSpace(request.Args[1])
-		return command == "rm" || command == "mv"
-	default:
-		return false
+func (e *Executor) executeRead(ctx context.Context, workspaceRoot string, record domain.RunRecord, env []string, request domain.OTRequest) (Execution, error) {
+	normalizedPath, err := normalizeWorkspaceRelativePath(workspaceRoot, record, request.Path)
+	if err != nil {
+		return Execution{}, err
 	}
+	args := []string{"read", "--path", normalizedPath}
+	if request.StartLine > 0 {
+		args = append(args, "--start", fmt.Sprintf("%d", request.StartLine))
+	}
+	if request.EndLine > 0 {
+		args = append(args, "--end", fmt.Sprintf("%d", request.EndLine))
+	}
+	output, err := e.ot.Run(ctx, workspaceRoot, record, env, domain.ExecRequest{Command: "ot", Args: args})
+	if err != nil {
+		return Execution{}, err
+	}
+	return Execution{Output: output}, nil
 }
 
-func decodeExecRequest(call domain.ToolCall) (domain.ExecRequest, error) {
-	if call.Name != "exec" {
-		return domain.ExecRequest{}, fmt.Errorf("unsupported tool %q", call.Name)
+func (e *Executor) executeList(ctx context.Context, workspaceRoot string, record domain.RunRecord, env []string, request domain.OTRequest) (Execution, error) {
+	normalizedPath, err := normalizeWorkspaceRelativePath(workspaceRoot, record, request.Path)
+	if err != nil {
+		return Execution{}, err
+	}
+	args := []string{"list", "--path", normalizedPath}
+	output, err := e.ot.Run(ctx, workspaceRoot, record, env, domain.ExecRequest{Command: "ot", Args: args})
+	if err != nil {
+		return Execution{}, err
+	}
+	return Execution{Output: output}, nil
+}
+
+func (e *Executor) executeSearch(ctx context.Context, workspaceRoot string, record domain.RunRecord, env []string, request domain.OTRequest) (Execution, error) {
+	normalizedPath, err := normalizeWorkspaceRelativePath(workspaceRoot, record, request.Path)
+	if err != nil {
+		return Execution{}, err
+	}
+	args := []string{"search", "--path", normalizedPath}
+	if strings.TrimSpace(request.NamePattern) != "" {
+		args = append(args, "--name", strings.TrimSpace(request.NamePattern))
+	}
+	if strings.TrimSpace(request.ContentPattern) != "" {
+		args = append(args, "--content", strings.TrimSpace(request.ContentPattern))
+	}
+	output, err := e.ot.Run(ctx, workspaceRoot, record, env, domain.ExecRequest{Command: "ot", Args: args})
+	if err != nil {
+		return Execution{}, err
+	}
+	return Execution{Output: output}, nil
+}
+
+func (e *Executor) executeWrite(ctx context.Context, workspaceRoot string, record domain.RunRecord, env []string, request domain.OTRequest) (Execution, error) {
+	output, err := e.ot.Run(ctx, workspaceRoot, record, env, domain.ExecRequest{
+		Command: "ot",
+		Args:    []string{"write", "--path", normalizeWorkspacePath(request.Path), "--from-stdin"},
+		Stdin:   request.Content,
+	})
+	if err != nil {
+		return Execution{}, err
+	}
+	return Execution{Output: output}, nil
+}
+
+func (e *Executor) executePatch(ctx context.Context, workspaceRoot string, record domain.RunRecord, env []string, request domain.OTRequest) (Execution, error) {
+	output, err := e.ot.Run(ctx, workspaceRoot, record, env, domain.ExecRequest{
+		Command: "ot",
+		Args:    []string{"patch", "--from-stdin"},
+		Stdin:   request.Patch,
+	})
+	if err != nil {
+		return Execution{}, err
+	}
+	return Execution{Output: output}, nil
+}
+
+func (e *Executor) executeCheck(ctx context.Context, workspaceRoot string, record domain.RunRecord, env []string, request domain.OTRequest) (Execution, error) {
+	checkName := strings.TrimSpace(request.Check)
+	resolvedPath, err := resolveCheckPath(workspaceRoot, record, request.Path)
+	if err != nil {
+		return Execution{}, err
 	}
 
-	var request domain.ExecRequest
-	if err := json.Unmarshal([]byte(call.Arguments), &request); err != nil {
-		return domain.ExecRequest{}, fmt.Errorf("decode exec request: %w", err)
+	var execRequest domain.ExecRequest
+	switch checkName {
+	case "go_test":
+		execRequest = domain.ExecRequest{Command: "go", Args: []string{"test", goPackagePattern(workspaceRoot, resolvedPath)}}
+	case "go_vet":
+		execRequest = domain.ExecRequest{Command: "go", Args: []string{"vet", goPackagePattern(workspaceRoot, resolvedPath)}}
+	case "golangci_lint":
+		target := "./..."
+		if strings.TrimSpace(request.Path) != "" {
+			target = goPackagePattern(workspaceRoot, resolvedPath)
+		}
+		execRequest = domain.ExecRequest{Command: "golangci-lint", Args: []string{"run", target}}
+	default:
+		return Execution{}, fmt.Errorf("unsupported check %q", request.Check)
 	}
-	request.Command = strings.TrimSpace(request.Command)
-	if request.Command == "" {
-		return domain.ExecRequest{}, fmt.Errorf("exec.command is required")
+
+	output, err := runExternal(ctx, workspaceRoot, record, env, execRequest)
+	if err != nil {
+		return Execution{}, err
 	}
-	if len(strings.Fields(request.Command)) > 1 {
-		return domain.ExecRequest{}, fmt.Errorf("exec.command must be a bare executable name; put flags and paths in exec.args")
+	return Execution{Output: output}, nil
+}
+
+func normalizeWorkspacePath(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return "."
 	}
-	if request.TimeoutSec < 0 {
-		return domain.ExecRequest{}, fmt.Errorf("exec.timeout_sec must be >= 0")
+	return strings.TrimSpace(path)
+}
+
+func normalizeWorkspaceRelativePath(workspaceRoot string, record domain.RunRecord, path string) (string, error) {
+	resolved, err := resolveCommandPath(workspaceRoot, baseCwd(record), normalizeWorkspacePath(path))
+	if err != nil {
+		return "", err
 	}
-	return request, nil
+	return displayRelativePath(workspaceRoot, resolved), nil
+}
+
+func normalizeTaskID(request domain.OTRequest) string {
+	if strings.TrimSpace(request.TaskID) != "" {
+		return strings.TrimSpace(request.TaskID)
+	}
+	title := strings.TrimSpace(request.TaskTitle)
+	if title == "" {
+		return fmt.Sprintf("task-%d", time.Now().UnixNano())
+	}
+	slug := strings.ToLower(title)
+	slug = strings.ReplaceAll(slug, " ", "-")
+	slug = strings.ReplaceAll(slug, "/", "-")
+	return fmt.Sprintf("%s-%d", slug, time.Now().UnixNano())
+}
+
+func normalizeRecordRole(record domain.RunRecord) domain.AgentRole {
+	role, err := domain.ParseAgentRole(record.AgentRole.String())
+	if err != nil {
+		return domain.AgentRoleGateway
+	}
+	return role
+}
+
+func resolveCheckPath(workspaceRoot string, record domain.RunRecord, path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return workspaceRoot, nil
+	}
+	resolved, err := resolveCommandPath(workspaceRoot, baseCwd(record), path)
+	if err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
+func goPackagePattern(workspaceRoot string, resolvedPath string) string {
+	info, err := os.Stat(resolvedPath)
+	if err == nil && !info.IsDir() {
+		resolvedPath = filepath.Dir(resolvedPath)
+	}
+
+	rel, err := filepath.Rel(workspaceRoot, resolvedPath)
+	if err != nil || rel == "." {
+		return "./..."
+	}
+	return "./" + filepath.ToSlash(rel) + "/..."
 }
 
 func runExternal(ctx context.Context, workspaceRoot string, record domain.RunRecord, env []string, request domain.ExecRequest) (string, error) {
@@ -263,36 +427,6 @@ func runExternal(ctx context.Context, workspaceRoot string, record domain.RunRec
 	}
 
 	return truncateOutput(stdout.String() + stderr.String()), nil
-}
-
-func validateCustomScript(workspaceRoot string, request domain.ExecRequest) error {
-	if request.Command != "bash" {
-		return nil
-	}
-	if len(request.Args) == 0 {
-		return fmt.Errorf("bash requires a script path")
-	}
-	if strings.HasPrefix(request.Args[0], "-") {
-		return fmt.Errorf("bash flags are not allowed")
-	}
-
-	scriptPath, err := resolveCommandPath(workspaceRoot, workspaceRoot, request.Args[0])
-	if err != nil {
-		return err
-	}
-	if filepath.Ext(scriptPath) != ".sh" {
-		return fmt.Errorf("custom script must be a .sh file")
-	}
-
-	toolsRoot := filepath.Join(workspaceRoot, "tools")
-	rel, err := filepath.Rel(toolsRoot, scriptPath)
-	if err != nil {
-		return fmt.Errorf("compute script path: %w", err)
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("custom bash script must live under tools/")
-	}
-	return nil
 }
 
 func resolveExecutionCwd(workspaceRoot string, record domain.RunRecord, request domain.ExecRequest) (string, error) {
@@ -341,34 +475,9 @@ func displayRelativePath(workspaceRoot string, path string) string {
 	return filepath.ToSlash(rel)
 }
 
-func firstArg(args []string) string {
-	if len(args) == 0 {
-		return ""
-	}
-	return args[0]
-}
-
 func truncateOutput(value string) string {
 	if len(value) <= maxCommandOutputBytes {
 		return value
 	}
 	return value[len(value)-maxCommandOutputBytes:]
-}
-
-func allowedDirectCommands() map[string]bool {
-	return map[string]bool{
-		"bash":   true,
-		"find":   true,
-		"git":    true,
-		"go":     true,
-		"mv":     true,
-		"node":   true,
-		"npm":    true,
-		"ot":     true,
-		"pytest": true,
-		"python": true,
-		"rg":     true,
-		"rm":     true,
-		"uv":     true,
-	}
 }

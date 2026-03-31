@@ -28,7 +28,7 @@ func TestResolveApprovalUpdatesRunState(t *testing.T) {
 		pending: &approvalState{
 			request: domain.ApprovalRequest{
 				RunID: "R1",
-				Call:  domain.ToolCall{Name: "exec"},
+				Call:  domain.ToolCall{Name: "ot"},
 			},
 			response: make(chan bool, 1),
 		},

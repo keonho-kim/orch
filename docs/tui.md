@@ -2,67 +2,81 @@
 
 ## Overview
 
-The TUI is a Bubble Tea console interface for the same runtime that powers `orch exec`.
+The TUI is the primary operator interface for `orch`. It uses the same orchestrator service as `orch exec`, but adds session browsing, modal approvals, provider setup, and a persistent timeline view.
 
-It is session-oriented rather than shell-oriented.
+It is session-oriented, not shell-oriented.
 
-## Main Interaction Model
+## Layout Model
 
 | Area | Responsibility |
 | --- | --- |
-| timeline | rendered runs, streamed output, reasoning visibility |
-| composer | prompt entry, slash commands, mode-aware submission |
-| status line | current state, warnings, result feedback |
-| modal flows | approvals, settings, session history, exit confirmation |
+| timeline | rendered run history, streamed output, active-run reasoning |
+| composer | prompt entry, slash command discovery, mode-aware submission |
+| command meta | current mode, provider, and model |
+| status line | inline state, warnings, and feedback |
+| modal views | approvals, settings, session history, exit confirmation |
+
+## First-Run Settings Gate
+
+If the current settings do not define a usable default provider and model, the TUI opens directly into setup flow.
+
+Current first-run behavior:
+
+- provider is chosen first
+- choosing `Ollama` enters URL selection and live model discovery
+- choosing `vLLM` switches to the manual settings form
+- the user cannot start runs until the default provider has a configured model
+
+The status line reflects that requirement until settings are saved.
 
 ## Composer Modes
 
-Two sticky composer modes exist:
+The composer has two sticky modes:
 
 - `ReAct Deep Agent`
 - `Plan`
 
-`Shift+Tab` switches between them.
+`Shift+Tab` toggles between them.
+
+The active mode is shown in the command meta chip at the right side of the composer row.
 
 ## Slash Commands
 
-When the input starts with `/`, the TUI shows a dropdown above the composer.
+When the current input starts with `/`, the TUI shows a slash-command dropdown above the composer.
 
 Current behavior:
 
-- `Up` / `Down` navigates dropdown entries
-- `Tab` or `Enter` completes a partial slash command selection
-- once fully selected, `Enter` executes the slash command normally
+- `Up` / `Down` moves through the dropdown
+- `Tab` or `Enter` can complete a selected slash command
+- `Enter` executes the command once the full command is selected
 
 Current slash commands:
 
-| Command | Meaning |
+| Command | Behavior |
 | --- | --- |
 | `/clear` | open a new session and clear the visible conversation |
-| `/compact` | compact the current session |
-| `/exit` | quit, cancelling active runs after confirmation if needed |
+| `/compact` | force session compaction |
+| `/exit` | quit the application |
 
-## Message History and Navigation
+## Approval Modal
 
-| Key | Behavior |
-| --- | --- |
-| `Up` / `Down` | recall past prompts when slash menu is not visible |
-| `PgUp` / `PgDn` | scroll timeline |
-| `Home` / `End` | jump to top or bottom |
-| mouse wheel | scroll timeline |
+When a tool call requires approval, the normal dashboard view is replaced by an approval page.
 
-## Thinking Visibility
+The modal shows:
 
-`Ctrl+T` toggles reasoning visibility for the active run.
+- run id
+- tool name
+- approval reason
+- raw tool arguments
 
-Rendering modes:
+Controls:
 
-- expanded `THINK` box
-- collapsed `THINKING ...` placeholder
+- `Enter` or `Y` to approve
+- `Esc` or `N` to deny
 
 ## Session History Picker
 
-`orch history` enters the same TUI runtime and opens a session picker.
+`orch history` launches the same TUI runtime and opens a session-history picker immediately.
 
 Picker behavior:
 
@@ -70,36 +84,73 @@ Picker behavior:
 - `Enter` restores the selected session
 - `Esc` closes the picker
 
-## `/clear` Semantics
+The picker lists saved sessions by session id and title.
 
-`/clear` no longer means “hide old text in the current viewport only”.
+## Settings Modal
 
-It now means:
+`Ctrl+S` opens settings.
 
-1. open a new session
-2. clear the visible conversation by switching to that new session
-3. finalize the old session in the background
+Current settings UI supports:
 
-Constraint:
+- default provider selection
+- `self_driving_mode`
+- Ollama base URL and model
+- vLLM base URL, model, and API key env name
+- `react_ralph_iter`
+- `plan_ralph_iter`
+- `compact_threshold_k`
 
-- a new session is not opened while a run is still active
+Changing providers inside the full form requires an explicit confirmation step.
 
-## View Rendering
+## Thinking Visibility
 
-The TUI renders:
+`Ctrl+T` toggles reasoning visibility for the active run.
 
-- the `ORCH` wordmark and version in the scrollable timeline
-- one section per run
-- `USER` and `ORCH` blocks
-- a separate reasoning block for the active run
-- a right-aligned command meta chip in the composer row
+Rendering modes:
 
-## Settings and Exit
+- expanded bordered `THINK` block
+- collapsed `THINKING ...` placeholder
+
+Reasoning is visible in the TUI only. It is not written into the session transcript files.
+
+## Navigation
 
 | Key | Behavior |
 | --- | --- |
+| `Up` / `Down` | prompt history recall when slash menu is hidden |
+| `PgUp` / `PgDn` | page timeline |
+| `Home` / `End` | jump to top or bottom |
+| mouse wheel | scroll timeline |
 | `Ctrl+S` | open settings |
+| `Ctrl+T` | toggle active-run reasoning |
 | `Ctrl+C` | quit immediately |
-| `/exit` | controlled shutdown path |
 
-`/exit` uses a confirmation modal if a run is active.
+## `/clear` And `/exit`
+
+`/clear` means:
+
+1. create a fresh session
+2. switch the UI to that session
+3. clear the visible conversation
+4. finalize the old session in the background
+
+Constraint:
+
+- it does not open a new session while a run is active
+
+`/exit` is the controlled shutdown path. If a run is active, the TUI shows a confirmation modal before quitting.
+
+## Rendering Notes
+
+The timeline renders:
+
+- the `ORCH` wordmark and version
+- one section per run
+- `USER` and `ORCH` content blocks
+- a separate reasoning block for the active run
+
+Assistant output supports lightweight inline terminal styling for:
+
+- `**bold**`
+- `*italic*`
+- `__underline__`

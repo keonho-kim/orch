@@ -1,80 +1,46 @@
 # Prompting Context
 
-## Provider-Call Composition
+## Default Prompt Inputs
 
-Every provider call is rebuilt from live repository state and session state.
+The default provider call now uses:
 
-```mermaid
-flowchart LR
-    A[System prompt] --> E[Provider call]
-    B[Dynamic iteration context] --> E
-    C[Session context] --> E
-    D[Prepared user request] --> E
-```
+- shared bootstrap `AGENTS.md`
+- role-specific system prompt
+- `bootstrap/TOOLS.md`
+- compact summary plus post-compact records
+- current user request or worker task contract
+- dynamically loaded evidence blocks when needed
 
-## Dynamic Iteration Context
+## Removed From Default Runtime Prompting
 
-The dynamic iteration block may include:
-
-- current working directory
 - `PRODUCT.md`
-- `AGENTS.md`
-- `bootstrap/USER.md`
-- `bootstrap/SKILLS.md`
-- concise mode-aware tool summary
-- selected skill content
-- resolved `@filename` / `#dir-name` references
-- `.orch/chatHistory.md`
-- active plan or current draft plan
+- large repo-level developer guidance
+- full `chatHistory.md`
+- full skills index on every call
 
-## References
+## Dynamic Loading
 
-### `@filename`
+The runtime now prefers loading context only when needed:
 
-- workspace-scoped
-- hidden files are included
-- rendered as markdown-style links
-- ambiguity is surfaced instead of silently guessed
+- `bootstrap/TOOLS.md`
+- selected skills
+- resolved references
+- bounded user memory from `bootstrap/USER.md`
+- bounded shared conversation memory from `.orch/chatHistory.md`
+- active cached plan for gateway runs
+- worker task title, contract, and task status
 
-### `#dir-name`
+## Role Split
 
-- directory-scoped variant of the same reference system
-- uses the same cached basename index and rank ordering
+### Gateway
 
-## Skills
+- interprets request
+- decomposes work
+- delegates worker tasks
+- synthesizes final answer
 
-### Skill Index
+### Worker
 
-The canonical index is:
-
-- `bootstrap/SKILLS.md`
-
-Skill content lives under:
-
-- `bootstrap/skills/<skill-name>/...`
-
-### Explicit Selection
-
-When the user mentions `$<skill-name>`:
-
-- the skill is validated against the current bootstrap skill set
-- matching skill content is injected every provider call
-- unknown skills fail clearly instead of being ignored
-
-## chatHistory vs Compact
-
-| Context source | Why it exists |
-| --- | --- |
-| compact + post-compact raw records | efficient session reinjection |
-| `.orch/chatHistory.md` | rolling continuity support for weaker sLLMs |
-
-These are complementary, not interchangeable.
-
-## Tool Summary
-
-The model receives:
-
-- structured tool schema in `ChatRequest.Tools`
-- concise text tool summary in the dynamic context
-
-The summary is derived from the same source as the structured tool catalog so the two cannot drift.
+- executes assigned contract only
+- does not re-delegate
+- returns bounded results

@@ -11,6 +11,8 @@ import (
 	"github.com/keonho-kim/orch/domain"
 	"github.com/keonho-kim/orch/internal/adapters"
 	"github.com/keonho-kim/orch/internal/prompts"
+	"github.com/keonho-kim/orch/internal/tooling"
+	"github.com/keonho-kim/orch/internal/userprefs"
 )
 
 func (s *Service) executeRun(ctx context.Context, runID string) {
@@ -59,14 +61,19 @@ func (s *Service) executeRun(ctx context.Context, runID string) {
 			_ = s.failRun(runID, err)
 			return
 		}
+		systemPrompt, err := s.buildSystemPrompt(state.record)
+		if err != nil {
+			_ = s.failRun(runID, err)
+			return
+		}
 
 		result, err := client.Chat(ctx, providerSettings, adapters.ChatRequest{
 			Model: record.Model,
 			Messages: append([]adapters.Message{
-				{Role: "system", Content: prompts.SystemPrompt(record.Mode)},
+				{Role: "system", Content: systemPrompt},
 				{Role: "system", Content: contextMessage},
 			}, messages...),
-			Tools: adapters.ToolCatalog(record.Mode),
+			Tools: adapters.ToolCatalog(record.Mode, record.AgentRole),
 		}, func(delta adapters.Delta) error {
 			if delta.Reasoning != "" {
 				if err := s.appendThinking(runID, delta.Reasoning); err != nil {
@@ -99,73 +106,184 @@ func (s *Service) executeRun(ctx context.Context, runID string) {
 			_ = s.completeRun(runID)
 			return
 		}
-
-		for _, call := range result.ToolCalls {
-			state, ok := s.state(runID)
-			if !ok {
-				return
-			}
-
-			if err := s.updateRunTask(runID, "Tool: "+call.Name); err != nil {
-				return
-			}
-
-			review, err := s.tooling.Review(state.record.WorkspacePath, state.record, state.env, snapshot.Settings, call)
-			if err != nil {
-				_ = s.failRun(runID, err)
-				return
-			}
-			if review.RequiresApproval {
-				approved, err := s.awaitApproval(ctx, runID, call, review.Reason)
-				if err != nil {
-					_ = s.cancelRun(runID, err)
-					return
-				}
-				if !approved {
-					_ = s.cancelRun(runID, fmt.Errorf("tool execution denied"))
-					return
-				}
-			}
-
-			execution, err := s.tooling.Execute(ctx, state.record.WorkspacePath, state.record, state.env, call)
-			if err != nil {
-				_ = s.failRun(runID, err)
-				return
-			}
-			if execution.NextCwd != "" {
-				if err := s.setRunCwd(runID, execution.NextCwd); err != nil {
-					_ = s.failRun(runID, err)
-					return
-				}
-			}
-
-			formatted := formatToolResult(call, execution.Output)
-			if err := s.appendRunEvent(runID, "tool", formatted); err != nil {
-				_ = s.failRun(runID, err)
-				return
-			}
-			if err := s.appendOutput(runID, formatted+"\n"); err != nil {
-				return
-			}
-
-			messages = append(messages, adapters.ToToolMessage(domain.ToolResult{
-				ToolCallID: call.ID,
-				Name:       call.Name,
-				Content:    execution.Output,
-			}))
-			if err := s.appendSessionTool(runID, domain.ToolResult{
-				ToolCallID: call.ID,
-				Name:       call.Name,
-				Content:    execution.Output,
-			}); err != nil {
-				_ = s.failRun(runID, err)
-				return
-			}
-			snapshot = s.Snapshot()
+		terminated, err := s.executeToolCalls(ctx, runID, snapshot.Settings, result.ToolCalls, &messages)
+		if err != nil {
+			_ = s.failRun(runID, err)
+			return
 		}
+		if terminated {
+			return
+		}
+		snapshot = s.Snapshot()
 	}
 
 	_ = s.failRun(runID, fmt.Errorf("ralph iteration limit reached (%d)", limit))
+}
+
+func (s *Service) executeToolCalls(
+	ctx context.Context,
+	runID string,
+	settings domain.Settings,
+	calls []domain.ToolCall,
+	messages *[]adapters.Message,
+) (bool, error) {
+	if s.agentRole == domain.AgentRoleGateway && allDelegateCalls(s.tooling, calls) {
+		return s.executeDelegateBatch(ctx, runID, calls, messages)
+	}
+
+	for _, call := range calls {
+		terminated, err := s.executeSingleToolCall(ctx, runID, settings, call, messages)
+		if err != nil || terminated {
+			return terminated, err
+		}
+	}
+	return false, nil
+}
+
+func (s *Service) executeSingleToolCall(
+	ctx context.Context,
+	runID string,
+	settings domain.Settings,
+	call domain.ToolCall,
+	messages *[]adapters.Message,
+) (bool, error) {
+	state, ok := s.state(runID)
+	if !ok {
+		return false, nil
+	}
+
+	if err := s.updateRunTask(runID, "Tool: "+call.Name); err != nil {
+		return false, err
+	}
+
+	review, err := s.tooling.Review(state.record.WorkspacePath, state.record, state.env, settings, call)
+	if err != nil {
+		return false, err
+	}
+	if review.RequiresApproval {
+		approved, err := s.awaitApproval(ctx, runID, call, review.Reason)
+		if err != nil {
+			return false, err
+		}
+		if !approved {
+			return false, fmt.Errorf("tool execution denied")
+		}
+	}
+
+	execution, err := s.tooling.Execute(ctx, state.record.WorkspacePath, state.record, state.env, call)
+	if err != nil {
+		return false, err
+	}
+	return s.recordToolExecution(runID, call, execution, messages)
+}
+
+func (s *Service) executeDelegateBatch(
+	ctx context.Context,
+	runID string,
+	calls []domain.ToolCall,
+	messages *[]adapters.Message,
+) (bool, error) {
+	state, ok := s.state(runID)
+	if !ok {
+		return false, nil
+	}
+
+	type result struct {
+		index     int
+		call      domain.ToolCall
+		execution tooling.Execution
+		err       error
+	}
+
+	results := make([]result, len(calls))
+	sem := make(chan struct{}, 2)
+	done := make(chan result, len(calls))
+	for index, call := range calls {
+		index := index
+		call := call
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem }()
+			execution, err := s.tooling.Execute(ctx, state.record.WorkspacePath, state.record, state.env, call)
+			done <- result{index: index, call: call, execution: execution, err: err}
+		}()
+	}
+
+	for range calls {
+		item := <-done
+		if item.err != nil {
+			return false, item.err
+		}
+		results[item.index] = item
+	}
+
+	for _, item := range results {
+		terminated, err := s.recordToolExecution(runID, item.call, item.execution, messages)
+		if err != nil || terminated {
+			return terminated, err
+		}
+	}
+	return false, nil
+}
+
+func allDelegateCalls(executor *tooling.Executor, calls []domain.ToolCall) bool {
+	if len(calls) == 0 {
+		return false
+	}
+	for _, call := range calls {
+		request, err := executor.DecodeOTRequest(call)
+		if err != nil || request.Op != "delegate" {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Service) recordToolExecution(
+	runID string,
+	call domain.ToolCall,
+	execution tooling.Execution,
+	messages *[]adapters.Message,
+) (bool, error) {
+	if execution.NextCwd != "" {
+		if err := s.setRunCwd(runID, execution.NextCwd); err != nil {
+			return false, err
+		}
+	}
+
+	formatted := formatToolResult(call, execution.Output)
+	if err := s.appendRunEvent(runID, "tool", formatted); err != nil {
+		return false, err
+	}
+	if err := s.appendOutput(runID, formatted+"\n"); err != nil {
+		return false, err
+	}
+
+	toolResult := domain.ToolResult{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Content:    execution.Output,
+	}
+	*messages = append(*messages, adapters.ToToolMessage(toolResult))
+	if err := s.appendSessionTool(runID, toolResult); err != nil {
+		return false, err
+	}
+
+	switch execution.TerminalStatus {
+	case domain.StatusCompleted:
+		return true, s.completeRun(runID)
+	case domain.StatusFailed:
+		message := execution.TerminalMessage
+		if strings.TrimSpace(message) == "" {
+			message = execution.Output
+		}
+		if strings.TrimSpace(message) == "" {
+			message = "worker task failed"
+		}
+		return true, s.failRun(runID, fmt.Errorf("%s", message))
+	default:
+		return false, nil
+	}
 }
 
 func (s *Service) awaitApproval(ctx context.Context, runID string, call domain.ToolCall, reason string) (bool, error) {
@@ -290,7 +408,7 @@ func (s *Service) completeRun(runID string) error {
 	if err := s.persistRun(record); err != nil {
 		return err
 	}
-	if record.Mode == domain.RunModePlan && (draft != "" || output != "") {
+	if record.AgentRole == domain.AgentRoleGateway && record.Mode == domain.RunModePlan && (draft != "" || output != "") {
 		content := draft
 		if content == "" {
 			content = output
@@ -305,6 +423,9 @@ func (s *Service) completeRun(runID string) error {
 	content := draft
 	if content == "" {
 		content = output
+	}
+	if record.AgentRole == domain.AgentRoleWorker {
+		_ = s.updateCurrentSessionTaskStatus("completed")
 	}
 	go s.runChatHistoryAssistantSummary(record.SessionID, record.RunID, content)
 	go s.runSessionMaintenance(record.SessionID)
@@ -330,6 +451,9 @@ func (s *Service) failRun(runID string, err error) error {
 
 	if err := s.persistRun(record); err != nil {
 		return err
+	}
+	if record.AgentRole == domain.AgentRoleWorker {
+		_ = s.updateCurrentSessionTaskStatus("failed")
 	}
 	_ = s.appendRunEvent(runID, "error", err.Error())
 	s.publish(UIEvent{RunID: runID, Message: err.Error()})
@@ -360,6 +484,9 @@ func (s *Service) cancelRun(runID string, err error) error {
 	if err := s.persistRun(record); err != nil {
 		return err
 	}
+	if record.AgentRole == domain.AgentRoleWorker {
+		_ = s.updateCurrentSessionTaskStatus("cancelled")
+	}
 	_ = s.appendRunEvent(runID, "cancel", message)
 	s.publish(UIEvent{RunID: runID, Message: message})
 	return nil
@@ -374,39 +501,50 @@ func (s *Service) state(runID string) (*runState, bool) {
 }
 
 func (s *Service) buildIterationContext(record domain.RunRecord, selectedSkills []selectedSkill, resolvedReferences string, activePlan domain.PlanCache, draftPlan string) (string, error) {
-	product, err := readWorkspaceFile(record.WorkspacePath, "PRODUCT.md")
+	toolsDoc, err := readWorkspaceFile(record.WorkspacePath, filepath.Join("bootstrap", "TOOLS.md"))
 	if err != nil {
 		return "", err
 	}
-	agents, err := readWorkspaceFile(record.WorkspacePath, "AGENTS.md")
+	user, err := loadUserMemory(record.WorkspacePath, record.AgentRole)
 	if err != nil {
 		return "", err
 	}
-	user, err := readWorkspaceFile(record.WorkspacePath, filepath.Join("bootstrap", "USER.md"))
+	chatHistory, err := s.loadChatHistoryMemory(record.AgentRole)
 	if err != nil {
 		return "", err
 	}
-	skills, err := readWorkspaceFile(record.WorkspacePath, filepath.Join("bootstrap", "SKILLS.md"))
-	if err != nil {
-		return "", err
-	}
-	chatHistory, err := s.sessions.ReadChatHistory()
-	if err != nil {
+
+	meta, err := s.sessions.LoadMetadata(record.SessionID)
+	if err != nil && strings.TrimSpace(record.SessionID) != "" {
 		return "", err
 	}
 
 	return prompts.IterationContext(
 		record,
-		product,
-		agents,
+		record.AgentRole,
+		toolsDoc,
 		user,
-		skills,
-		formatSelectedSkills(selectedSkills),
 		chatHistory,
+		formatSelectedSkills(selectedSkills),
 		resolvedReferences,
 		activePlan,
 		draftPlan,
+		meta.TaskTitle,
+		meta.TaskContract,
+		meta.TaskStatus,
 	), nil
+}
+
+func (s *Service) buildSystemPrompt(record domain.RunRecord) (string, error) {
+	common, err := readWorkspaceFile(record.WorkspacePath, "AGENTS.md")
+	if err != nil {
+		return "", err
+	}
+	rolePrompt, err := readWorkspaceFile(record.WorkspacePath, rolePromptPath(record.AgentRole))
+	if err != nil {
+		return "", err
+	}
+	return prompts.SystemPrompt(record.Mode, record.AgentRole, common, rolePrompt), nil
 }
 
 func readWorkspaceFile(workspaceRoot string, relativePath string) (string, error) {
@@ -416,6 +554,33 @@ func readWorkspaceFile(workspaceRoot string, relativePath string) (string, error
 		return "", fmt.Errorf("read %s: %w", relativePath, err)
 	}
 	return strings.TrimSpace(string(data)), nil
+}
+
+func rolePromptPath(role domain.AgentRole) string {
+	if role == domain.AgentRoleWorker {
+		return filepath.Join("bootstrap", "system-prompt", "worker", "AGENTS.md")
+	}
+	return filepath.Join("bootstrap", "system-prompt", "gateway", "AGENTS.md")
+}
+
+func loadUserMemory(workspaceRoot string, role domain.AgentRole) (string, error) {
+	maxManaged := 640
+	maxUser := 480
+	if role == domain.AgentRoleGateway {
+		maxManaged = 1200
+		maxUser = 800
+	}
+	return userprefs.ReadMemoryExcerpt(filepath.Join(workspaceRoot, "bootstrap", "USER.md"), maxManaged, maxUser)
+}
+
+func (s *Service) loadChatHistoryMemory(role domain.AgentRole) (string, error) {
+	limitEntries := 2
+	maxBytes := 800
+	if role == domain.AgentRoleGateway {
+		limitEntries = 6
+		maxBytes = 2400
+	}
+	return s.sessions.ReadChatHistoryRecent(limitEntries, maxBytes)
 }
 
 func formatSelectedSkills(selectedSkills []selectedSkill) string {

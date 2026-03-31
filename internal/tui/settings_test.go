@@ -56,11 +56,6 @@ func TestSettingsFocusDoesNotFocusToggleFields(t *testing.T) {
 		t.Fatal("did not expect a text input to remain focused on a toggle field")
 	}
 
-	state.focusField(fieldAutoTranslate)
-	if state.inputs[fieldOllamaBaseURL].Focused() {
-		t.Fatal("did not expect a text input to remain focused on auto-translate")
-	}
-
 	state.focusField(fieldOllamaBaseURL)
 	if !state.inputs[fieldOllamaBaseURL].Focused() {
 		t.Fatal("expected text-backed fields to receive focus")
@@ -120,20 +115,6 @@ func TestProviderDoesNotChangeWhenFieldIsNotFocused(t *testing.T) {
 	}
 }
 
-func TestSettingsLeftRightTogglesAutoTranslate(t *testing.T) {
-	t.Parallel()
-
-	model := testModel(80, 24)
-	model.settings.visible = true
-	model.settings.form.focusField(fieldAutoTranslate)
-
-	updatedModel, _ := model.updateSettings(tea.KeyMsg{Type: tea.KeyRight})
-	updated := updatedModel.(Model)
-	if !updated.settings.form.autoTranslate {
-		t.Fatal("expected auto-translate to be enabled")
-	}
-}
-
 func TestSettingsLeftRightTogglesSelfDriving(t *testing.T) {
 	t.Parallel()
 
@@ -156,20 +137,8 @@ func TestSettingsNavigationSkipsHiddenProviderFields(t *testing.T) {
 
 	updatedModel, _ := model.updateSettings(tea.KeyMsg{Type: tea.KeyUp})
 	updated := updatedModel.(Model)
-	if updated.settings.form.focus != fieldAutoTranslate {
-		t.Fatalf("expected focus to move to Auto Translate, got %v", updated.settings.form.focus)
-	}
-
-	updatedModel, _ = updated.updateSettings(tea.KeyMsg{Type: tea.KeyUp})
-	updated = updatedModel.(Model)
 	if updated.settings.form.focus != fieldSelfDriving {
 		t.Fatalf("expected focus to move to Self-Driving Mode, got %v", updated.settings.form.focus)
-	}
-
-	updatedModel, _ = updated.updateSettings(tea.KeyMsg{Type: tea.KeyDown})
-	updated = updatedModel.(Model)
-	if updated.settings.form.focus != fieldAutoTranslate {
-		t.Fatalf("expected focus to move back to Auto Translate, got %v", updated.settings.form.focus)
 	}
 
 	updatedModel, _ = updated.updateSettings(tea.KeyMsg{Type: tea.KeyDown})

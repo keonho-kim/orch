@@ -11,7 +11,7 @@ func TestManagerCreateAppendAndLoadRecords(t *testing.T) {
 	t.Parallel()
 
 	manager := NewManager(t.TempDir())
-	meta, err := manager.Create("/repo", domain.ProviderOllama, "model", time.Now(), "", "")
+	meta, err := manager.Create("/repo", domain.ProviderOllama, "model", time.Now(), "", "", "", domain.AgentRoleGateway, "", "", "")
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestListSessionsSkipsEmptyMetadataOnlyEntries(t *testing.T) {
 	root := t.TempDir()
 	manager := NewManager(root)
 
-	meta, err := manager.Create("/repo", domain.ProviderOllama, "model", time.Now(), "", "")
+	meta, err := manager.Create("/repo", domain.ProviderOllama, "model", time.Now(), "", "", "", domain.AgentRoleGateway, "", "", "")
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -86,11 +86,11 @@ func TestLatestSessionIDReturnsMostRecentMetadata(t *testing.T) {
 	t.Parallel()
 
 	manager := NewManager(t.TempDir())
-	first, err := manager.Create("/repo", domain.ProviderOllama, "model", time.Now().Add(-time.Hour), "", "")
+	first, err := manager.Create("/repo", domain.ProviderOllama, "model", time.Now().Add(-time.Hour), "", "", "", domain.AgentRoleGateway, "", "", "")
 	if err != nil {
 		t.Fatalf("create first: %v", err)
 	}
-	second, err := manager.Create("/repo", domain.ProviderOllama, "model", time.Now(), "", "")
+	second, err := manager.Create("/repo", domain.ProviderOllama, "model", time.Now(), "", "", "", domain.AgentRoleGateway, "", "", "")
 	if err != nil {
 		t.Fatalf("create second: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestManagerCreatePersistsParentLinkage(t *testing.T) {
 	t.Parallel()
 
 	manager := NewManager(t.TempDir())
-	meta, err := manager.Create("/repo", domain.ProviderOllama, "model", time.Now(), "PARENT", "R9")
+	meta, err := manager.Create("/repo", domain.ProviderOllama, "model", time.Now(), "PARENT", "R9", "", domain.AgentRoleGateway, "", "", "")
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}

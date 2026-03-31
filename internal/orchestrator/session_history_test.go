@@ -21,7 +21,7 @@ func TestSessionContextMessagesUseLatestCompactAndLaterRecords(t *testing.T) {
 		t.Fatalf("resolve paths: %v", err)
 	}
 	manager := session.NewManager(paths.SessionsDir)
-	meta, err := manager.Create(repoRoot, domain.ProviderOllama, "model", time.Now(), "", "")
+	meta, err := manager.Create(repoRoot, domain.ProviderOllama, "model", time.Now(), "", "", "", domain.AgentRoleGateway, "", "", "")
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestLoadInheritedContextUsesParentCompactSummaryAndLaterRecords(t *testing.
 		t.Fatalf("resolve paths: %v", err)
 	}
 	manager := session.NewManager(paths.SessionsDir)
-	meta, err := manager.Create(repoRoot, domain.ProviderOllama, "model", time.Now(), "", "")
+	meta, err := manager.Create(repoRoot, domain.ProviderOllama, "model", time.Now(), "", "", "", domain.AgentRoleGateway, "", "", "")
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestRunChatHistoryUserSummaryAppendsEntry(t *testing.T) {
 		t.Fatalf("resolve paths: %v", err)
 	}
 	manager := session.NewManager(paths.SessionsDir)
-	meta, err := manager.Create(repoRoot, domain.ProviderOllama, "model", time.Now(), "", "")
+	meta, err := manager.Create(repoRoot, domain.ProviderOllama, "model", time.Now(), "", "", "", domain.AgentRoleGateway, "", "", "")
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestRunChatHistoryAssistantSummaryAppendsEntry(t *testing.T) {
 		t.Fatalf("resolve paths: %v", err)
 	}
 	manager := session.NewManager(paths.SessionsDir)
-	meta, err := manager.Create(repoRoot, domain.ProviderOllama, "model", time.Now(), "", "")
+	meta, err := manager.Create(repoRoot, domain.ProviderOllama, "model", time.Now(), "", "", "", domain.AgentRoleGateway, "", "", "")
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}

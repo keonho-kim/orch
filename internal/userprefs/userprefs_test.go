@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestEnsureDetectedLanguageAppendsManagedBlock(t *testing.T) {
+func TestUpsertManagedValueWritesManagedBlock(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "USER.md")
@@ -15,9 +15,9 @@ func TestEnsureDetectedLanguageAppendsManagedBlock(t *testing.T) {
 		t.Fatalf("write user file: %v", err)
 	}
 
-	written, err := EnsureDetectedLanguage(path, "kor")
+	written, err := UpsertManagedValue(path, "preferred_editor", "vim")
 	if err != nil {
-		t.Fatalf("ensure detected language: %v", err)
+		t.Fatalf("upsert managed value: %v", err)
 	}
 	if !written {
 		t.Fatal("expected managed block to be written")
@@ -28,33 +28,28 @@ func TestEnsureDetectedLanguageAppendsManagedBlock(t *testing.T) {
 		t.Fatalf("read user file: %v", err)
 	}
 	content := string(data)
-	if !strings.Contains(content, `detected_language = "kor"`) {
-		t.Fatalf("expected detected language block, got %q", content)
+	if !strings.Contains(content, `preferred_editor = "vim"`) {
+		t.Fatalf("expected managed value block, got %q", content)
 	}
 }
 
-func TestEnsureDetectedLanguageDoesNotOverwriteExistingValue(t *testing.T) {
+func TestReadMemoryExcerptReturnsUserAndManagedSlices(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "USER.md")
-	content := "# User Intent\n\n" + startMarker + "\n" + `detected_language = "en"` + "\n" + endMarker + "\n"
+	content := "# User Intent\n\nStable user note.\n\n" + startMarker + "\n" + `preferred_editor = "vim"` + "\n" + endMarker + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write user file: %v", err)
 	}
 
-	written, err := EnsureDetectedLanguage(path, "kor")
+	excerpt, err := ReadMemoryExcerpt(path, 128, 128)
 	if err != nil {
-		t.Fatalf("ensure detected language: %v", err)
+		t.Fatalf("read memory excerpt: %v", err)
 	}
-	if written {
-		t.Fatal("did not expect overwrite of existing detected language")
+	if !strings.Contains(excerpt, "User memory:") || !strings.Contains(excerpt, "Stable user note.") {
+		t.Fatalf("expected user memory in excerpt, got %q", excerpt)
 	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read user file: %v", err)
-	}
-	if strings.Contains(string(data), `detected_language = "kor"`) {
-		t.Fatalf("unexpected overwrite: %q", string(data))
+	if !strings.Contains(excerpt, "Managed memory:") || !strings.Contains(excerpt, `preferred_editor = "vim"`) {
+		t.Fatalf("expected managed memory in excerpt, got %q", excerpt)
 	}
 }

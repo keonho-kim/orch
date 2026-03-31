@@ -18,7 +18,7 @@ func TestVLLMClientStreamsContentToolCallsAndUsage(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hello \"}}]}\n\n")
 		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"world\"}}]}\n\n")
-		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"exec\",\"arguments\":\"{\\\"command\\\":\\\"ot\\\",\\\"args\\\":[\\\"read\\\",\\\"--path\\\",\\\"README.md\\\"]}\"}}],\"content\":\"\"},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":6,\"total_tokens\":16}}\n\n")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"ot\",\"arguments\":\"{\\\"op\\\":\\\"read\\\",\\\"path\\\":\\\"README.md\\\"}\"}}],\"content\":\"\"},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":6,\"total_tokens\":16}}\n\n")
 		_, _ = io.WriteString(w, "data: [DONE]\n\n")
 	}))
 	defer server.Close()
@@ -38,7 +38,7 @@ func TestVLLMClientStreamsContentToolCallsAndUsage(t *testing.T) {
 	if result.Content != "hello world" {
 		t.Fatalf("unexpected content: %q", result.Content)
 	}
-	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Name != "exec" {
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Name != "ot" {
 		t.Fatalf("unexpected tool calls: %+v", result.ToolCalls)
 	}
 	if result.Usage.TotalTokens != 16 || result.Usage.PromptTokens != 10 || result.Usage.CompletionTokens != 6 {
@@ -79,54 +79,39 @@ func TestOllamaClientStreamsReasoningAndUsage(t *testing.T) {
 	}
 }
 
-func TestToolCatalogDescriptionsMatchOTContract(t *testing.T) {
+func TestToolCatalogIsRoleAwareAndOTOnly(t *testing.T) {
 	t.Parallel()
 
-	react := ToolCatalog(domain.RunModeReact)[0].Function.Description
-	if !strings.Contains(react, "ot read --path <path>") {
-		t.Fatalf("expected react tool description to mention path inspection, got %q", react)
+	gateway := ToolCatalog(domain.RunModeReact, domain.AgentRoleGateway)
+	if len(gateway) != 1 || gateway[0].Function.Name != "ot" {
+		t.Fatalf("expected single ot tool, got %+v", gateway)
 	}
-	if !strings.Contains(react, "`ot list [--path <path>]`") {
-		t.Fatalf("expected react tool description to mention ot list, got %q", react)
-	}
-	if !strings.Contains(react, "`ot search [--path <path>] [--name <glob>] [--content <pattern>]`") {
-		t.Fatalf("expected react tool description to mention ot search, got %q", react)
-	}
-	if !strings.Contains(react, "`ot subagent --prompt <task>`") {
-		t.Fatalf("expected react tool description to mention ot subagent, got %q", react)
-	}
-	if !strings.Contains(react, "`ot pointer --value <ot-pointer>`") {
-		t.Fatalf("expected react tool description to mention ot pointer, got %q", react)
-	}
-	if !strings.Contains(react, "`rg` or `find` directly only") {
-		t.Fatalf("expected react tool description to keep rg/find fallback wording, got %q", react)
+	description := gateway[0].Function.Description
+	if !strings.Contains(description, "gateway OT operation") {
+		t.Fatalf("expected gateway description, got %q", description)
 	}
 
-	plan := ToolCatalog(domain.RunModePlan)[0].Function.Description
-	if !strings.Contains(plan, "ot read --path <path>") {
-		t.Fatalf("expected plan tool description to mention path inspection, got %q", plan)
+	worker := ToolCatalog(domain.RunModeReact, domain.AgentRoleWorker)
+	if !strings.Contains(worker[0].Function.Description, "worker OT operation") {
+		t.Fatalf("expected worker description, got %q", worker[0].Function.Description)
 	}
-	if !strings.Contains(plan, "ot list [--path <path>]") {
-		t.Fatalf("expected plan tool description to mention ot list, got %q", plan)
-	}
-	if !strings.Contains(plan, "ot search [--path <path>] [--name <glob>] [--content <pattern>]") {
-		t.Fatalf("expected plan tool description to mention ot search, got %q", plan)
-	}
-	if strings.Contains(plan, "ot subagent") {
-		t.Fatalf("did not expect plan tool description to mention ot subagent, got %q", plan)
+
+	plan := ToolCatalog(domain.RunModePlan, domain.AgentRoleGateway)
+	if !strings.Contains(plan[0].Function.Description, "read, list, and search") {
+		t.Fatalf("expected plan read-only description, got %q", plan[0].Function.Description)
 	}
 }
 
-func TestToolSummaryStaysModeAwareAndConcise(t *testing.T) {
+func TestToolSummaryStaysRoleAwareAndConcise(t *testing.T) {
 	t.Parallel()
 
-	react := ToolSummary(domain.RunModeReact)
-	if !strings.Contains(react, "- exec: Run one allowed CLI-style command.") {
-		t.Fatalf("expected react tool summary to contain concise exec description, got %q", react)
+	gateway := ToolSummary(domain.RunModeReact, domain.AgentRoleGateway)
+	if !strings.Contains(gateway, "- ot: Run one gateway OT operation.") {
+		t.Fatalf("expected gateway summary, got %q", gateway)
 	}
 
-	plan := ToolSummary(domain.RunModePlan)
-	if !strings.Contains(plan, "- exec: Run one plan-mode command.") {
-		t.Fatalf("expected plan tool summary to contain concise plan description, got %q", plan)
+	worker := ToolSummary(domain.RunModeReact, domain.AgentRoleWorker)
+	if !strings.Contains(worker, "- ot: Run one worker OT operation.") {
+		t.Fatalf("expected worker summary, got %q", worker)
 	}
 }

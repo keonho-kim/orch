@@ -40,7 +40,6 @@ func TestProvisionCopiesBootstrapFilesWithoutClaudeMirror(t *testing.T) {
 	root := filepath.Join(baseDir, "test-workspace")
 	assets := filepath.Join(baseDir, "runtime-asset", "bootstrap")
 	skillDir := filepath.Join(assets, "skills", "workspace-bootstrap")
-	product := filepath.Join(baseDir, "PRODUCT.md")
 	toolsRoot := filepath.Join(baseDir, "tools")
 	otTools := filepath.Join(toolsRoot, "ot")
 
@@ -54,11 +53,11 @@ func TestProvisionCopiesBootstrapFilesWithoutClaudeMirror(t *testing.T) {
 		filepath.Join(assets, "AGENTS.md"):          "workspace agents",
 		filepath.Join(assets, "USER.md"):            "user bootstrap",
 		filepath.Join(assets, "SKILLS.md"):          "skills bootstrap",
+		filepath.Join(assets, "TOOLS.md"):           "tools bootstrap",
 		filepath.Join(skillDir, "SKILL.md"):         "skill instructions",
 		filepath.Join(skillDir, "notes.txt"):        "helper notes",
 		filepath.Join(otTools, "read.sh"):           "#!/usr/bin/env bash\necho read\n",
 		filepath.Join(toolsRoot, "custom.sh"):       "#!/usr/bin/env bash\necho custom\n",
-		product:                                     "product copy",
 		filepath.Join(root, "bootstrap", "USER.md"): "preserved user memory",
 	}
 	for path, content := range files {
@@ -70,7 +69,7 @@ func TestProvisionCopiesBootstrapFilesWithoutClaudeMirror(t *testing.T) {
 		}
 	}
 
-	provisioned, err := Provision(root, assets, product, []string{"PATH=/usr/bin"})
+	provisioned, err := Provision(root, assets, []string{"PATH=/usr/bin"})
 	if err != nil {
 		t.Fatalf("provision workspace: %v", err)
 	}
@@ -81,8 +80,8 @@ func TestProvisionCopiesBootstrapFilesWithoutClaudeMirror(t *testing.T) {
 	assertFileContent(t, filepath.Join(root, "AGENTS.md"), "workspace agents")
 	assertFileContent(t, filepath.Join(root, "bootstrap", "USER.md"), "preserved user memory")
 	assertFileContent(t, filepath.Join(root, "bootstrap", "SKILLS.md"), "skills bootstrap")
+	assertFileContent(t, filepath.Join(root, "bootstrap", "TOOLS.md"), "tools bootstrap")
 	assertFileContent(t, filepath.Join(root, "bootstrap", "skills", "workspace-bootstrap", "SKILL.md"), "skill instructions")
-	assertFileContent(t, filepath.Join(root, "PRODUCT.md"), "product copy")
 	assertFileContent(t, filepath.Join(root, "tools", "ot", "read.sh"), "#!/usr/bin/env bash\necho read\n")
 	assertFileContent(t, filepath.Join(root, "tools", "custom.sh"), "#!/usr/bin/env bash\necho custom\n")
 

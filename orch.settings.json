@@ -13,7 +13,6 @@
   },
   "approval_policy": "confirm_mutations",
   "self_driving_mode": false,
-  "auto_translate": false,
   "react_ralph_iter": 3,
   "plan_ralph_iter": 3
 }

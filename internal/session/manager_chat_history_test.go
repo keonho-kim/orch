@@ -103,3 +103,34 @@ func TestManagerAppendChatHistorySerializesConcurrentWrites(t *testing.T) {
 		}
 	}
 }
+
+func TestManagerReadChatHistoryRecentReturnsBoundedTail(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), ".orch", "sessions")
+	manager := NewManager(root)
+
+	for index := 0; index < 4; index++ {
+		err := manager.AppendChatHistory(ChatHistoryEntry{
+			CreatedAt: time.Now().Add(time.Duration(index) * time.Second),
+			SessionID: fmt.Sprintf("S%d", index),
+			RunID:     fmt.Sprintf("R%d", index),
+			Speaker:   ChatHistorySpeakerUser,
+			Summary:   fmt.Sprintf("summary-%d", index),
+		})
+		if err != nil {
+			t.Fatalf("append chat history %d: %v", index, err)
+		}
+	}
+
+	content, err := manager.ReadChatHistoryRecent(2, 512)
+	if err != nil {
+		t.Fatalf("read recent chat history: %v", err)
+	}
+	if strings.Contains(content, "summary-0") || strings.Contains(content, "summary-1") {
+		t.Fatalf("expected older entries to be dropped, got %q", content)
+	}
+	if !strings.Contains(content, "summary-2") || !strings.Contains(content, "summary-3") {
+		t.Fatalf("expected recent entries, got %q", content)
+	}
+}

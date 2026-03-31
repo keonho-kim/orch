@@ -108,7 +108,7 @@ func TestParseCommandHistoryRestoreSession(t *testing.T) {
 func TestParseCommandSubagentRun(t *testing.T) {
 	t.Parallel()
 
-	command, err := parseCommand([]string{"__subagent-run", "/repo", "S1", "R2", "inspect failing tests"})
+	command, err := parseCommand([]string{"__subagent-run", "/repo", "S1", "R2", `{"id":"task-1","title":"Inspect","contract":"inspect failing tests"}`})
 	if err != nil {
 		t.Fatalf("parse command: %v", err)
 	}
@@ -118,8 +118,8 @@ func TestParseCommandSubagentRun(t *testing.T) {
 	if command.repoRoot != "/repo" || command.parentSessionID != "S1" || command.parentRunID != "R2" {
 		t.Fatalf("unexpected hidden subagent command: %+v", command)
 	}
-	if command.subagentPrompt != "inspect failing tests" {
-		t.Fatalf("unexpected prompt: %q", command.subagentPrompt)
+	if command.subagentTask == "" {
+		t.Fatalf("expected encoded task payload")
 	}
 }
 
@@ -133,7 +133,10 @@ func TestBuildSubagentResultTruncatesFailedOutput(t *testing.T) {
 		FinalOutput: strings.Repeat("x", 12010),
 	}
 
-	result := buildSubagentResult("S9", record)
+	result := buildSubagentResult("S9", domain.SubagentTask{ID: "task-9", Title: "Inspect"}, domain.SessionMetadata{
+		TaskStatus: "failed",
+		WorkerRole: domain.AgentRoleWorker,
+	}, record)
 	if result.ChildSessionID != "S9" || result.ChildRunID != "R9" {
 		t.Fatalf("unexpected result identity: %+v", result)
 	}

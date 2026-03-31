@@ -14,7 +14,7 @@ type ProvisionedWorkspace struct {
 	Env  []string
 }
 
-func Provision(root string, bootstrapAssets string, productSource string, baseEnv []string) (ProvisionedWorkspace, error) {
+func Provision(root string, bootstrapAssets string, baseEnv []string) (ProvisionedWorkspace, error) {
 	bootstrapDir := filepath.Join(root, "bootstrap")
 	toolsDir := filepath.Join(root, "tools")
 	for _, path := range []string{root, bootstrapDir, toolsDir} {
@@ -23,8 +23,8 @@ func Provision(root string, bootstrapAssets string, productSource string, baseEn
 		}
 	}
 
-	repoRoot := filepath.Dir(productSource)
-	if err := syncBootstrapFiles(root, bootstrapDir, toolsDir, bootstrapAssets, productSource, filepath.Join(repoRoot, "tools")); err != nil {
+	repoRoot := filepath.Dir(filepath.Dir(bootstrapAssets))
+	if err := syncBootstrapFiles(root, bootstrapDir, toolsDir, bootstrapAssets, filepath.Join(repoRoot, "tools")); err != nil {
 		return ProvisionedWorkspace{}, err
 	}
 
@@ -39,7 +39,6 @@ func syncBootstrapFiles(
 	bootstrapDir string,
 	toolsDir string,
 	bootstrapAssets string,
-	productSource string,
 	toolsSource string,
 ) error {
 	files := []struct {
@@ -48,7 +47,7 @@ func syncBootstrapFiles(
 	}{
 		{source: filepath.Join(bootstrapAssets, "AGENTS.md"), target: filepath.Join(workspaceRoot, "AGENTS.md")},
 		{source: filepath.Join(bootstrapAssets, "SKILLS.md"), target: filepath.Join(bootstrapDir, "SKILLS.md")},
-		{source: productSource, target: filepath.Join(workspaceRoot, "PRODUCT.md")},
+		{source: filepath.Join(bootstrapAssets, "TOOLS.md"), target: filepath.Join(bootstrapDir, "TOOLS.md")},
 	}
 
 	for _, item := range files {
@@ -62,6 +61,9 @@ func syncBootstrapFiles(
 	}
 
 	if err := syncDirectory(filepath.Join(bootstrapAssets, "skills"), filepath.Join(bootstrapDir, "skills")); err != nil {
+		return err
+	}
+	if err := syncDirectory(filepath.Join(bootstrapAssets, "system-prompt"), filepath.Join(bootstrapDir, "system-prompt")); err != nil {
 		return err
 	}
 

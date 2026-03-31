@@ -5,79 +5,89 @@ import (
 	"strings"
 
 	"github.com/keonho-kim/orch/domain"
-	"github.com/keonho-kim/orch/internal/adapters"
 )
 
-const planSystemPrompt = `
-You are the planning session for this workspace.
-
-Produce a concrete implementation plan only.
-Do not execute the plan.
-On each iteration, verify the product contract and bootstrap guidance again.
-Use only these commands through the exec tool:
-- cd <path>
-- ot read --path <path>
-- ot list [--path <path>]
-- ot search [--path <path>] [--name <glob>] [--content <pattern>]
-
-Do not mutate files, run builds, or use any command other than cd, ot read, ot list, and ot search.
-Use bootstrap/USER.md only for durable user information.
-Use bootstrap/SKILLS.md as the skill index and inspect only relevant bootstrap/skills/<skill-name>/ directories.
-User prompts may include @filename or #dir-name references. Treat them as resolved workspace references when they appear in the dynamic context.
-When a user explicitly names $<skill-name>, prioritize that skill's instructions.
+const (
+	planModeSuffix = `
+Plan mode is read-only.
+Use only read, list, and search operations.
+Do not delegate, write, patch, or run checks.
+Return a concrete plan only.
 `
 
-const reactSystemPrompt = `
-You are the ReAct deep execution session for this workspace.
-
-Before acting, verify the current request against the product contract, bootstrap guidance, and any cached plan.
-Use bootstrap/USER.md only for durable user information.
-Use bootstrap/SKILLS.md as the skill index and inspect only relevant bootstrap/skills/<skill-name>/ directories.
-User prompts may include @filename or #dir-name references. Treat them as resolved workspace references when they appear in the dynamic context.
-When a user explicitly names $<skill-name>, prioritize that skill's instructions.
-Use the provided exec tool instead of assuming file contents.
-Prefer ot read --path <path> for file content and quick directory inspection.
-Prefer ot list for long directory listings and ot search for curated name/content search.
-Use ot pointer --value <ot-pointer> when compact or chatHistory text references a current-session transcript pointer that needs the raw JSONL line contents.
-Use ot subagent --prompt <task> when a bounded child run should work in a separate child session.
-Use rg or find directly only when task execution needs search behavior outside the curated OT commands.
-Use custom tools/*.sh scripts only when the curated OT commands do not cover the task.
-Prefer small, auditable changes and explain your intent through tool usage.
-Do not use shell interpolation. Use argv-style command arguments only.
+	reactGatewaySuffix = `
+You are running as the gateway agent.
+Use delegation for executable work whenever practical.
+Do not mutate files directly.
+Do not run validation checks directly.
 `
 
-func SystemPrompt(mode domain.RunMode) string {
-	if mode == domain.RunModePlan {
-		return strings.TrimSpace(planSystemPrompt)
+	reactWorkerSuffix = `
+You are running as the worker agent.
+You must stay inside the assigned task contract.
+Do not delegate.
+Do not broaden scope beyond the assigned task.
+`
+)
+
+func SystemPrompt(mode domain.RunMode, role domain.AgentRole, common string, roleSpecific string) string {
+	sections := make([]string, 0, 4)
+	if strings.TrimSpace(common) != "" {
+		sections = append(sections, strings.TrimSpace(common))
 	}
-	return strings.TrimSpace(reactSystemPrompt)
+	if strings.TrimSpace(roleSpecific) != "" {
+		sections = append(sections, strings.TrimSpace(roleSpecific))
+	}
+
+	if mode == domain.RunModePlan {
+		sections = append(sections, strings.TrimSpace(planModeSuffix))
+	} else if role == domain.AgentRoleWorker {
+		sections = append(sections, strings.TrimSpace(reactWorkerSuffix))
+	} else {
+		sections = append(sections, strings.TrimSpace(reactGatewaySuffix))
+	}
+
+	return strings.Join(sections, "\n\n")
 }
 
 func IterationContext(
 	record domain.RunRecord,
-	product string,
-	agents string,
+	role domain.AgentRole,
+	tools string,
 	user string,
-	skills string,
-	selectedSkills string,
 	chatHistory string,
+	selectedSkills string,
 	resolvedReferences string,
 	activePlan domain.PlanCache,
 	draftPlan string,
+	taskTitle string,
+	taskContract string,
+	taskStatus string,
 ) string {
 	sections := []string{
+		"Agent role:\n" + role.DisplayName(),
 		"Current working directory:\n" + DisplayWorkspacePath(record.WorkspacePath, record.CurrentCwd),
-		"PRODUCT.md:\n" + strings.TrimSpace(product),
-		"AGENTS.md:\n" + strings.TrimSpace(agents),
-		"bootstrap/USER.md:\n" + strings.TrimSpace(user),
-		"bootstrap/SKILLS.md:\n" + strings.TrimSpace(skills),
-		"Available tools for this call:\n" + adapters.ToolSummary(record.Mode),
 	}
-	if strings.TrimSpace(selectedSkills) != "" {
-		sections = append(sections, "Selected skill content for this call:\n"+strings.TrimSpace(selectedSkills))
+	if strings.TrimSpace(tools) != "" {
+		sections = append(sections, "bootstrap/TOOLS.md:\n"+strings.TrimSpace(tools))
+	}
+	if strings.TrimSpace(user) != "" {
+		sections = append(sections, "bootstrap/USER.md:\n"+strings.TrimSpace(user))
 	}
 	if strings.TrimSpace(chatHistory) != "" {
 		sections = append(sections, ".orch/chatHistory.md:\n"+strings.TrimSpace(chatHistory))
+	}
+	if strings.TrimSpace(taskTitle) != "" {
+		sections = append(sections, "Assigned task title:\n"+strings.TrimSpace(taskTitle))
+	}
+	if strings.TrimSpace(taskStatus) != "" {
+		sections = append(sections, "Assigned task status:\n"+strings.TrimSpace(taskStatus))
+	}
+	if strings.TrimSpace(taskContract) != "" {
+		sections = append(sections, "Assigned task contract:\n"+strings.TrimSpace(taskContract))
+	}
+	if strings.TrimSpace(selectedSkills) != "" {
+		sections = append(sections, "Selected skill content for this call:\n"+strings.TrimSpace(selectedSkills))
 	}
 	if strings.TrimSpace(resolvedReferences) != "" {
 		sections = append(sections, "Resolved workspace references for this request:\n"+strings.TrimSpace(resolvedReferences))
@@ -89,7 +99,7 @@ func IterationContext(
 			sections = append(sections, "Current draft plan:\n"+strings.TrimSpace(draftPlan))
 		}
 	case domain.RunModeReact:
-		if strings.TrimSpace(activePlan.Content) != "" {
+		if role == domain.AgentRoleGateway && strings.TrimSpace(activePlan.Content) != "" {
 			sections = append(sections, "Active cached plan:\n"+strings.TrimSpace(activePlan.Content))
 		}
 	}

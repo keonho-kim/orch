@@ -46,8 +46,25 @@ func (s *Service) Create(
 	startedAt time.Time,
 	parentSessionID string,
 	parentRunID string,
+	parentTaskID string,
+	workerRole domain.AgentRole,
+	taskTitle string,
+	taskContract string,
+	taskStatus string,
 ) (domain.SessionMetadata, error) {
-	return s.manager.Create(workspacePath, provider, model, startedAt, parentSessionID, parentRunID)
+	return s.manager.Create(
+		workspacePath,
+		provider,
+		model,
+		startedAt,
+		parentSessionID,
+		parentRunID,
+		parentTaskID,
+		workerRole,
+		taskTitle,
+		taskContract,
+		taskStatus,
+	)
 }
 
 func (s *Service) LoadMetadata(sessionID string) (domain.SessionMetadata, error) {

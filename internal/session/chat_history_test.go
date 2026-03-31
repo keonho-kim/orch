@@ -82,7 +82,7 @@ func TestAppendChatHistoryUserSummaryWritesRollingEntry(t *testing.T) {
 	runner := &chatHistoryRunnerStub{response: "summarized user request"}
 	service := NewService(manager, runner)
 
-	meta, err := manager.Create("/repo", domain.ProviderOllama, "model", time.Now(), "", "")
+	meta, err := manager.Create("/repo", domain.ProviderOllama, "model", time.Now(), "", "", "", domain.AgentRoleGateway, "", "", "")
 	if err != nil {
 		t.Fatalf("create session metadata: %v", err)
 	}

@@ -114,14 +114,6 @@ func (m Model) updateSettingsForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.statusMessage = "Self-driving mode disabled."
 			}
 			return m, nil
-		case fieldAutoTranslate:
-			form.autoTranslate = !form.autoTranslate
-			if form.autoTranslate {
-				m.statusMessage = "Auto-translate enabled."
-			} else {
-				m.statusMessage = "Auto-translate disabled."
-			}
-			return m, nil
 		}
 	case "enter":
 		settings := form.buildSettings(m.snapshot.Settings)

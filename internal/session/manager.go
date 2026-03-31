@@ -34,6 +34,11 @@ func (m *Manager) Create(
 	startedAt time.Time,
 	parentSessionID string,
 	parentRunID string,
+	parentTaskID string,
+	workerRole domain.AgentRole,
+	taskTitle string,
+	taskContract string,
+	taskStatus string,
 ) (domain.SessionMetadata, error) {
 	if err := os.MkdirAll(m.root, 0o755); err != nil {
 		return domain.SessionMetadata{}, fmt.Errorf("create sessions dir: %w", err)
@@ -44,6 +49,11 @@ func (m *Manager) Create(
 		WorkspacePath:   workspacePath,
 		ParentSessionID: strings.TrimSpace(parentSessionID),
 		ParentRunID:     strings.TrimSpace(parentRunID),
+		ParentTaskID:    strings.TrimSpace(parentTaskID),
+		WorkerRole:      workerRole,
+		TaskTitle:       strings.TrimSpace(taskTitle),
+		TaskContract:    strings.TrimSpace(taskContract),
+		TaskStatus:      strings.TrimSpace(taskStatus),
 		Provider:        provider,
 		Model:           model,
 		Title:           "Untitled session",

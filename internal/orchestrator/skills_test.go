@@ -67,12 +67,22 @@ func TestBuildIterationContextIncludesSelectedSkillsAndChatHistory(t *testing.T)
 		paths:    paths,
 		sessions: session.NewService(manager, nil),
 	}
+	if err := os.MkdirAll(paths.SessionsDir, 0o755); err != nil {
+		t.Fatalf("mkdir sessions dir: %v", err)
+	}
+	if err := service.sessions.SaveMetadata(domain.SessionMetadata{
+		SessionID:     "S1",
+		WorkspacePath: paths.TestWorkspace,
+		WorkerRole:    domain.AgentRoleGateway,
+		TaskStatus:    "running",
+	}); err != nil {
+		t.Fatalf("save session metadata: %v", err)
+	}
 
 	for relative, content := range map[string]string{
-		"PRODUCT.md":                            "product",
-		"AGENTS.md":                             "agents",
-		filepath.Join("bootstrap", "USER.md"):   "user",
-		filepath.Join("bootstrap", "SKILLS.md"): "skills index",
+		"AGENTS.md":                            "agents",
+		filepath.Join("bootstrap", "USER.md"):  "user note",
+		filepath.Join("bootstrap", "TOOLS.md"): "tools guide",
 	} {
 		path := filepath.Join(paths.TestWorkspace, relative)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -82,19 +92,20 @@ func TestBuildIterationContextIncludesSelectedSkillsAndChatHistory(t *testing.T)
 			t.Fatalf("write %s: %v", relative, err)
 		}
 	}
-
 	if err := manager.AppendChatHistory(session.ChatHistoryEntry{
 		CreatedAt: time.Now(),
 		SessionID: "S1",
 		RunID:     "R1",
-		Speaker:   session.ChatHistorySpeakerUser,
-		Summary:   "rolling summary",
+		Speaker:   session.ChatHistorySpeakerAssistant,
+		Summary:   "recent shared memory",
 	}); err != nil {
 		t.Fatalf("append chat history: %v", err)
 	}
 
 	context, err := service.buildIterationContext(domain.RunRecord{
 		Mode:          domain.RunModeReact,
+		AgentRole:     domain.AgentRoleGateway,
+		SessionID:     "S1",
 		WorkspacePath: paths.TestWorkspace,
 		CurrentCwd:    paths.TestWorkspace,
 	}, []selectedSkill{{
@@ -109,11 +120,14 @@ func TestBuildIterationContextIncludesSelectedSkillsAndChatHistory(t *testing.T)
 	if !strings.Contains(context, "Selected skill content for this call:") {
 		t.Fatalf("expected selected skill content in context, got %q", context)
 	}
-	if !strings.Contains(context, ".orch/chatHistory.md:") {
-		t.Fatalf("expected chatHistory heading in context, got %q", context)
+	if !strings.Contains(context, "bootstrap/TOOLS.md:\ntools guide") {
+		t.Fatalf("expected tools guide in context, got %q", context)
 	}
-	if !strings.Contains(context, "rolling summary") {
-		t.Fatalf("expected chatHistory content in context, got %q", context)
+	if !strings.Contains(context, "bootstrap/USER.md:\nUser memory:\nuser note") {
+		t.Fatalf("expected bounded user memory in context, got %q", context)
+	}
+	if !strings.Contains(context, ".orch/chatHistory.md:\n## ") || !strings.Contains(context, "recent shared memory") {
+		t.Fatalf("expected bounded chat history excerpt, got %q", context)
 	}
 	if !strings.Contains(context, "Resolved workspace references for this request:") {
 		t.Fatalf("expected resolved references in context, got %q", context)

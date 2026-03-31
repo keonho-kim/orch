@@ -45,7 +45,6 @@ func TestSaveAndLoadSettings(t *testing.T) {
 		},
 		ApprovalPolicy:    domain.ApprovalConfirmMutations,
 		SelfDrivingMode:   true,
-		AutoTranslate:     true,
 		ReactRalphIter:    5,
 		PlanRalphIter:     7,
 		CompactThresholdK: 150,
@@ -66,9 +65,6 @@ func TestSaveAndLoadSettings(t *testing.T) {
 	}
 	if !loaded.SelfDrivingMode {
 		t.Fatal("expected self-driving mode to round-trip")
-	}
-	if !loaded.AutoTranslate {
-		t.Fatal("expected auto-translate to round-trip")
 	}
 	if loaded.ReactRalphIter != 5 || loaded.PlanRalphIter != 7 {
 		t.Fatalf("unexpected Ralph settings: react=%d plan=%d", loaded.ReactRalphIter, loaded.PlanRalphIter)

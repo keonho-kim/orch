@@ -78,9 +78,6 @@ func (m Model) renderSettingsField(field settingsField) string {
 		return prefix + label + ": " + renderSettingsProviderSelector(selectedProvider)
 	case settingsFieldKindToggle:
 		value := m.settings.form.selfDriving
-		if field == fieldAutoTranslate {
-			value = m.settings.form.autoTranslate
-		}
 		return prefix + label + ": " + onOffLabel(value)
 	default:
 		return prefix + label + ": " + m.settings.form.inputs[field].View()

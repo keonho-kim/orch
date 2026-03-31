@@ -31,7 +31,7 @@ type command struct {
 	showHistory      bool
 	restoreLatest    bool
 	finalizeSession  string
-	subagentPrompt   string
+	subagentTask     string
 	parentSessionID  string
 	parentRunID      string
 }
@@ -50,7 +50,7 @@ func Run(args []string) error {
 	case "__finalize-session":
 		return runFinalizeSession(command.repoRoot, command.finalizeSession)
 	case "__subagent-run":
-		return runSubagent(command.repoRoot, command.parentSessionID, command.parentRunID, command.subagentPrompt, os.Stdout)
+		return runSubagent(command.repoRoot, command.parentSessionID, command.parentRunID, command.subagentTask, os.Stdout)
 	default:
 		return fmt.Errorf("unsupported command %q", command.name)
 	}
@@ -114,14 +114,14 @@ func parseCommand(args []string) (command, error) {
 		return command{name: "__finalize-session", finalizeSession: args[1], repoRoot: repoRoot}, nil
 	case "__subagent-run":
 		if len(args) != 5 || strings.TrimSpace(args[1]) == "" || strings.TrimSpace(args[4]) == "" {
-			return command{}, fmt.Errorf("usage: orch __subagent-run <repo-root> <parent-session-id|-> <parent-run-id|-> <prompt>")
+			return command{}, fmt.Errorf("usage: orch __subagent-run <repo-root> <parent-session-id|-> <parent-run-id|-> <task-json>")
 		}
 		return command{
 			name:            "__subagent-run",
 			repoRoot:        args[1],
 			parentSessionID: hiddenValue(args[2]),
 			parentRunID:     hiddenValue(args[3]),
-			subagentPrompt:  args[4],
+			subagentTask:    args[4],
 		}, nil
 	default:
 		return command{}, fmt.Errorf("unsupported command %q", args[0])
@@ -290,10 +290,23 @@ func runFinalizeSession(repoRoot string, sessionID string) error {
 	return app.service.FinalizeCurrentSession()
 }
 
-func runSubagent(repoRoot string, parentSessionID string, parentRunID string, prompt string, stdout io.Writer) error {
+func runSubagent(repoRoot string, parentSessionID string, parentRunID string, encodedTask string, stdout io.Writer) error {
+	var task domain.SubagentTask
+	if err := json.Unmarshal([]byte(encodedTask), &task); err != nil {
+		return fmt.Errorf("decode subagent task: %w", err)
+	}
+	if strings.TrimSpace(task.Contract) == "" {
+		return fmt.Errorf("subagent task contract is required")
+	}
+
 	app, err := newApp(repoRoot, orchestrator.BootOptions{
 		ParentSessionID:      parentSessionID,
 		ParentRunID:          parentRunID,
+		ParentTaskID:         task.ID,
+		TaskTitle:            task.Title,
+		TaskContract:         task.Contract,
+		TaskStatus:           "queued",
+		AgentRole:            domain.AgentRoleWorker,
 		InheritParentContext: strings.TrimSpace(parentSessionID) != "",
 	})
 	if err != nil {
@@ -302,7 +315,7 @@ func runSubagent(repoRoot string, parentSessionID string, parentRunID string, pr
 	defer app.close()
 
 	childSessionID := app.service.Snapshot().CurrentSession.SessionID
-	runID, err := app.service.SubmitPromptMode(prompt, domain.RunModeReact)
+	runID, err := app.service.SubmitPromptMode(task.Contract, domain.RunModeReact)
 	if err != nil {
 		return err
 	}
@@ -312,7 +325,7 @@ func runSubagent(repoRoot string, parentSessionID string, parentRunID string, pr
 		return err
 	}
 
-	result := buildSubagentResult(childSessionID, record)
+	result := buildSubagentResult(childSessionID, task, app.service.Snapshot().CurrentSession, record)
 	encoded, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("marshal subagent result: %w", err)
@@ -341,11 +354,20 @@ func waitForRun(ctx context.Context, service *orchestrator.Service, runID string
 	}
 }
 
-func buildSubagentResult(childSessionID string, record domain.RunRecord) domain.SubagentResult {
+func buildSubagentResult(
+	childSessionID string,
+	task domain.SubagentTask,
+	meta domain.SessionMetadata,
+	record domain.RunRecord,
+) domain.SubagentResult {
 	finalOutput, truncated := truncateSubagentOutput(record.FinalOutput)
 	result := domain.SubagentResult{
 		ChildSessionID: childSessionID,
 		ChildRunID:     record.RunID,
+		TaskID:         task.ID,
+		TaskTitle:      task.Title,
+		TaskStatus:     meta.TaskStatus,
+		WorkerRole:     meta.WorkerRole.String(),
 		Status:         string(record.Status),
 		FinalOutput:    finalOutput,
 		Truncated:      truncated,
