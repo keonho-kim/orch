@@ -17,20 +17,39 @@ import (
 const maxCommandOutputBytes = 64000
 
 type Executor struct {
-	ot *OTRunner
+	ot              *OTRunner
+	contextSnapshot func(domain.RunRecord) (domain.ContextSnapshot, error)
+	listTasks       func(domain.RunRecord, string) ([]domain.TaskView, error)
+	getTask         func(domain.RunRecord, string) (domain.TaskView, error)
 }
 
 type Execution struct {
-	Output           string
-	RequiresApproval bool
-	Reason           string
-	NextCwd          string
-	TerminalStatus   domain.RunStatus
-	TerminalMessage  string
+	Output               string
+	RequiresApproval     bool
+	Reason               string
+	NextCwd              string
+	TerminalStatus       domain.RunStatus
+	TerminalMessage      string
+	TaskSummary          string
+	TaskChangedPaths     []string
+	TaskChecksRun        []string
+	TaskEvidencePointers []string
+	TaskFollowups        []string
+	TaskErrorKind        string
 }
 
 func NewExecutor() *Executor {
 	return &Executor{ot: NewOTRunner()}
+}
+
+func (e *Executor) SetStateResolvers(
+	contextSnapshot func(domain.RunRecord) (domain.ContextSnapshot, error),
+	listTasks func(domain.RunRecord, string) ([]domain.TaskView, error),
+	getTask func(domain.RunRecord, string) (domain.TaskView, error),
+) {
+	e.contextSnapshot = contextSnapshot
+	e.listTasks = listTasks
+	e.getTask = getTask
 }
 
 func (e *Executor) DecodeOTRequest(call domain.ToolCall) (domain.OTRequest, error) {
@@ -66,6 +85,41 @@ func (e *Executor) Execute(ctx context.Context, workspaceRoot string, record dom
 	}
 
 	switch strings.TrimSpace(request.Op) {
+	case "context":
+		if e.contextSnapshot == nil {
+			return Execution{}, fmt.Errorf("context snapshot resolver is not configured")
+		}
+		snapshot, err := e.contextSnapshot(record)
+		if err != nil {
+			return Execution{}, err
+		}
+		return Execution{Output: renderContextSnapshot(snapshot)}, nil
+	case "task_list":
+		if e.listTasks == nil {
+			return Execution{}, fmt.Errorf("task list resolver is not configured")
+		}
+		tasks, err := e.listTasks(record, request.StatusFilter)
+		if err != nil {
+			return Execution{}, err
+		}
+		output, err := renderJSON(tasks)
+		if err != nil {
+			return Execution{}, err
+		}
+		return Execution{Output: output}, nil
+	case "task_get":
+		if e.getTask == nil {
+			return Execution{}, fmt.Errorf("task resolver is not configured")
+		}
+		task, err := e.getTask(record, request.TaskID)
+		if err != nil {
+			return Execution{}, err
+		}
+		output, err := renderJSON(task)
+		if err != nil {
+			return Execution{}, err
+		}
+		return Execution{Output: output}, nil
 	case "read":
 		return e.executeRead(ctx, workspaceRoot, record, env, request)
 	case "list":
@@ -79,34 +133,41 @@ func (e *Executor) Execute(ctx context.Context, workspaceRoot string, record dom
 	case "check":
 		return e.executeCheck(ctx, workspaceRoot, record, env, request)
 	case "delegate":
+		wait := !request.WaitProvided || request.Wait
 		output, err := e.ot.RunDelegateTask(ctx, workspaceRoot, record, env, domain.SubagentTask{
 			ID:       normalizeTaskID(request),
 			Title:    strings.TrimSpace(request.TaskTitle),
 			Contract: strings.TrimSpace(request.TaskContract),
-		})
+		}, wait)
 		if err != nil {
 			return Execution{}, err
 		}
 		return Execution{Output: output}, nil
 	case "complete":
-		message := strings.TrimSpace(request.Message)
-		if message == "" {
-			message = "Worker task completed."
-		}
+		message := terminalTaskMessage(request, "Worker task completed.")
 		return Execution{
-			Output:          message,
-			TerminalStatus:  domain.StatusCompleted,
-			TerminalMessage: message,
+			Output:               renderTaskOutcomeOutput(request, message),
+			TerminalStatus:       domain.StatusCompleted,
+			TerminalMessage:      message,
+			TaskSummary:          strings.TrimSpace(request.Summary),
+			TaskChangedPaths:     append([]string(nil), request.ChangedPaths...),
+			TaskChecksRun:        append([]string(nil), request.ChecksRun...),
+			TaskEvidencePointers: append([]string(nil), request.EvidencePointers...),
+			TaskFollowups:        append([]string(nil), request.Followups...),
+			TaskErrorKind:        strings.TrimSpace(request.ErrorKind),
 		}, nil
 	case "fail":
-		message := strings.TrimSpace(request.Message)
-		if message == "" {
-			message = "Worker task failed."
-		}
+		message := terminalTaskMessage(request, "Worker task failed.")
 		return Execution{
-			Output:          message,
-			TerminalStatus:  domain.StatusFailed,
-			TerminalMessage: message,
+			Output:               renderTaskOutcomeOutput(request, message),
+			TerminalStatus:       domain.StatusFailed,
+			TerminalMessage:      message,
+			TaskSummary:          strings.TrimSpace(request.Summary),
+			TaskChangedPaths:     append([]string(nil), request.ChangedPaths...),
+			TaskChecksRun:        append([]string(nil), request.ChecksRun...),
+			TaskEvidencePointers: append([]string(nil), request.EvidencePointers...),
+			TaskFollowups:        append([]string(nil), request.Followups...),
+			TaskErrorKind:        strings.TrimSpace(request.ErrorKind),
 		}, nil
 	default:
 		return Execution{}, fmt.Errorf("unsupported ot op %q", request.Op)
@@ -121,6 +182,10 @@ func decodeOTRequest(call domain.ToolCall) (domain.OTRequest, error) {
 	var request domain.OTRequest
 	if err := json.Unmarshal([]byte(call.Arguments), &request); err != nil {
 		return domain.OTRequest{}, fmt.Errorf("decode ot request: %w", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(call.Arguments), &raw); err == nil {
+		_, request.WaitProvided = raw["wait"]
 	}
 	request.Op = strings.TrimSpace(strings.ToLower(request.Op))
 	if request.Op == "" {
@@ -141,17 +206,17 @@ func validateOTRequest(record domain.RunRecord, request domain.OTRequest) error 
 
 	if record.Mode == domain.RunModePlan {
 		switch op {
-		case "read", "list", "search":
+		case "context", "task_list", "task_get", "read", "list", "search":
 			return validatePathRequest(op, request)
 		default:
-			return fmt.Errorf("plan mode only allows read, list, and search operations")
+			return fmt.Errorf("plan mode only allows context, task_list, task_get, read, list, and search operations")
 		}
 	}
 
 	switch role {
 	case domain.AgentRoleWorker:
 		switch op {
-		case "read", "list", "search":
+		case "context", "task_list", "task_get", "read", "list", "search":
 			return validatePathRequest(op, request)
 		case "write":
 			if strings.TrimSpace(request.Path) == "" {
@@ -188,7 +253,7 @@ func validateOTRequest(record domain.RunRecord, request domain.OTRequest) error 
 				return fmt.Errorf("delegate requires task_title")
 			}
 			return nil
-		case "read", "list", "search":
+		case "context", "task_list", "task_get", "read", "list", "search":
 			return validatePathRequest(op, request)
 		default:
 			return fmt.Errorf("gateway role does not allow ot op %q", request.Op)
@@ -197,6 +262,17 @@ func validateOTRequest(record domain.RunRecord, request domain.OTRequest) error 
 }
 
 func validatePathRequest(op string, request domain.OTRequest) error {
+	switch op {
+	case "context":
+		return nil
+	case "task_list":
+		return nil
+	case "task_get":
+		if strings.TrimSpace(request.TaskID) == "" {
+			return fmt.Errorf("task_get requires task_id")
+		}
+		return nil
+	}
 	if op != "list" && strings.TrimSpace(request.Path) == "" {
 		return fmt.Errorf("%s requires path", op)
 	}
@@ -211,7 +287,7 @@ func validatePathRequest(op string, request domain.OTRequest) error {
 
 func classifyOTApproval(record domain.RunRecord, settings domain.Settings, request domain.OTRequest) (bool, string, error) {
 	switch request.Op {
-	case "read", "list", "search", "delegate", "complete", "fail":
+	case "context", "task_list", "task_get", "read", "list", "search", "delegate", "complete", "fail":
 		return false, "", nil
 	case "write":
 		return true, "ot write requires approval.", nil
@@ -225,6 +301,65 @@ func classifyOTApproval(record domain.RunRecord, settings domain.Settings, reque
 	default:
 		return false, "", fmt.Errorf("unsupported ot op %q", request.Op)
 	}
+}
+
+func terminalTaskMessage(request domain.OTRequest, fallback string) string {
+	if message := strings.TrimSpace(request.Message); message != "" {
+		return message
+	}
+	if summary := strings.TrimSpace(request.Summary); summary != "" {
+		return summary
+	}
+	return fallback
+}
+
+func renderTaskOutcomeOutput(request domain.OTRequest, message string) string {
+	lines := []string{message}
+	if len(request.ChangedPaths) > 0 {
+		lines = append(lines, "changed_paths: "+strings.Join(request.ChangedPaths, ", "))
+	}
+	if len(request.ChecksRun) > 0 {
+		lines = append(lines, "checks_run: "+strings.Join(request.ChecksRun, ", "))
+	}
+	if len(request.EvidencePointers) > 0 {
+		lines = append(lines, "evidence_pointers: "+strings.Join(request.EvidencePointers, ", "))
+	}
+	if len(request.Followups) > 0 {
+		lines = append(lines, "followups: "+strings.Join(request.Followups, " | "))
+	}
+	if kind := strings.TrimSpace(request.ErrorKind); kind != "" {
+		lines = append(lines, "error_kind: "+kind)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderContextSnapshot(snapshot domain.ContextSnapshot) string {
+	lines := []string{
+		"session_id: " + snapshot.SessionID,
+		"run_id: " + snapshot.RunID,
+		"provider: " + snapshot.Provider,
+		"model: " + snapshot.Model,
+		"workspace_path: " + snapshot.WorkspacePath,
+		"current_cwd: " + snapshot.CurrentCwd,
+		fmt.Sprintf("compact_summary_present: %t", snapshot.CompactSummaryPresent),
+		fmt.Sprintf("post_compact_record_count: %d", snapshot.PostCompactRecordCount),
+		fmt.Sprintf("inherited_summary_present: %t", snapshot.InheritedSummaryPresent),
+		fmt.Sprintf("inherited_record_count: %d", snapshot.InheritedRecordCount),
+		"selected_skills: " + strings.Join(snapshot.SelectedSkills, ", "),
+		fmt.Sprintf("resolved_reference_count: %d", snapshot.ResolvedReferenceCount),
+		fmt.Sprintf("user_memory_present: %t", snapshot.UserMemoryPresent),
+		fmt.Sprintf("chat_history_excerpt_bytes: %d", snapshot.ChatHistoryExcerptBytes),
+		fmt.Sprintf("plan_cache_present: %t", snapshot.PlanCachePresent),
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderJSON(value any) (string, error) {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal ot result: %w", err)
+	}
+	return string(data), nil
 }
 
 func (e *Executor) executeRead(ctx context.Context, workspaceRoot string, record domain.RunRecord, env []string, request domain.OTRequest) (Execution, error) {

@@ -119,7 +119,11 @@ func (r *OTRunner) runPointer(workspaceRoot string, record domain.RunRecord, ins
 	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(record.SessionID) == "" {
+	sessionID := strings.TrimSpace(pointer.SessionID)
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(record.SessionID)
+	}
+	if sessionID == "" {
 		return "", fmt.Errorf("ot pointer requires an active session")
 	}
 
@@ -127,7 +131,7 @@ func (r *OTRunner) runPointer(workspaceRoot string, record domain.RunRecord, ins
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(repoRoot, ".orch", "sessions", record.SessionID+".jsonl")
+	path := filepath.Join(repoRoot, ".orch", "sessions", sessionID+".jsonl")
 	file, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("open pointer session file: %w", err)
@@ -174,7 +178,7 @@ func (r *OTRunner) runSubagent(
 		ID:       fmt.Sprintf("task-%d", time.Now().UnixNano()),
 		Title:    title,
 		Contract: inspection.Prompt,
-	})
+	}, true)
 }
 
 func (r *OTRunner) RunDelegateTask(
@@ -183,6 +187,7 @@ func (r *OTRunner) RunDelegateTask(
 	record domain.RunRecord,
 	env []string,
 	task domain.SubagentTask,
+	wait bool,
 ) (string, error) {
 	if subagentDepth(env) > 0 {
 		return "", fmt.Errorf("nested ot subagent runs are not allowed")
@@ -228,7 +233,83 @@ func (r *OTRunner) RunDelegateTask(
 
 	nextEnv := append([]string(nil), env...)
 	nextEnv = append(nextEnv, fmt.Sprintf("%s=%d", subagentDepthEnv, subagentDepth(env)+1))
-	return runExternal(ctx, workspaceRoot, record, nextEnv, request)
+	if wait {
+		return runExternal(ctx, workspaceRoot, record, nextEnv, request)
+	}
+
+	startFile, err := os.CreateTemp("", "orch-subagent-start-*.json")
+	if err != nil {
+		return "", fmt.Errorf("create async start file: %w", err)
+	}
+	startPath := startFile.Name()
+	if err := startFile.Close(); err != nil {
+		return "", fmt.Errorf("close async start file: %w", err)
+	}
+	if err := os.Remove(startPath); err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("prepare async start file: %w", err)
+	}
+	defer os.Remove(startPath)
+
+	task.StartFilePath = startPath
+	encodedTask, err = json.Marshal(task)
+	if err != nil {
+		return "", fmt.Errorf("marshal async subagent task: %w", err)
+	}
+
+	command := exec.Command(executable,
+		"__subagent-run",
+		repoRoot,
+		parentSessionID,
+		parentRunID,
+		string(encodedTask),
+	)
+	command.Dir = request.Cwd
+	command.Env = append([]string(nil), nextEnv...)
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		return "", fmt.Errorf("open devnull: %w", err)
+	}
+	defer devNull.Close()
+	command.Stdout = devNull
+	command.Stderr = devNull
+	if err := command.Start(); err != nil {
+		return "", fmt.Errorf("start async subagent: %w", err)
+	}
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- command.Wait()
+	}()
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+
+	for {
+		data, err := os.ReadFile(startPath)
+		if err == nil && len(data) > 0 {
+			return strings.TrimSpace(string(data)), nil
+		}
+		if err != nil && !os.IsNotExist(err) {
+			return "", fmt.Errorf("read async start file: %w", err)
+		}
+
+		select {
+		case err := <-waitDone:
+			if err != nil {
+				return "", fmt.Errorf("async subagent exited before start handshake: %w", err)
+			}
+			return "", fmt.Errorf("async subagent exited before start handshake")
+		case <-ctx.Done():
+			_ = command.Process.Kill()
+			return "", ctx.Err()
+		case <-timeout.C:
+			_ = command.Process.Kill()
+			return "", fmt.Errorf("timed out waiting for async subagent start handshake")
+		case <-ticker.C:
+		}
+	}
 }
 
 func inspectOTSubagent(args []string) (otInspection, error) {

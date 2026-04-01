@@ -320,6 +320,11 @@ func runSubagent(repoRoot string, parentSessionID string, parentRunID string, en
 	if err != nil {
 		return err
 	}
+	if strings.TrimSpace(task.StartFilePath) != "" {
+		if err := writeSubagentStartPayload(task.StartFilePath, buildTaskView(app.service.Snapshot().CurrentSession, task, runID)); err != nil {
+			return err
+		}
+	}
 
 	record, err := waitForRun(app.ctx, app.service, runID)
 	if err != nil {
@@ -363,15 +368,21 @@ func buildSubagentResult(
 ) domain.SubagentResult {
 	finalOutput, truncated := truncateSubagentOutput(record.FinalOutput)
 	result := domain.SubagentResult{
-		ChildSessionID: childSessionID,
-		ChildRunID:     record.RunID,
-		TaskID:         task.ID,
-		TaskTitle:      task.Title,
-		TaskStatus:     meta.TaskStatus,
-		WorkerRole:     meta.WorkerRole.String(),
-		Status:         string(record.Status),
-		FinalOutput:    finalOutput,
-		Truncated:      truncated,
+		ChildSessionID:       childSessionID,
+		ChildRunID:           record.RunID,
+		TaskID:               task.ID,
+		TaskTitle:            task.Title,
+		TaskStatus:           meta.TaskStatus,
+		WorkerRole:           meta.WorkerRole.String(),
+		Status:               string(record.Status),
+		TaskSummary:          meta.TaskSummary,
+		TaskChangedPaths:     append([]string(nil), meta.TaskChangedPaths...),
+		TaskChecksRun:        append([]string(nil), meta.TaskChecksRun...),
+		TaskEvidencePointers: append([]string(nil), meta.TaskEvidencePointers...),
+		TaskFollowups:        append([]string(nil), meta.TaskFollowups...),
+		TaskErrorKind:        meta.TaskErrorKind,
+		FinalOutput:          finalOutput,
+		Truncated:            truncated,
 	}
 
 	if record.Status != domain.StatusCompleted {
@@ -390,6 +401,41 @@ func truncateSubagentOutput(value string) (string, bool) {
 		return value, false
 	}
 	return value[len(value)-maxSubagentOutputBytes:], true
+}
+
+func buildTaskView(meta domain.SessionMetadata, task domain.SubagentTask, runID string) domain.TaskView {
+	return domain.TaskView{
+		TaskID:               task.ID,
+		Title:                task.Title,
+		Status:               meta.TaskStatus,
+		ParentSessionID:      meta.ParentSessionID,
+		ParentRunID:          meta.ParentRunID,
+		ChildSessionID:       meta.SessionID,
+		ChildRunID:           runID,
+		WorkerRole:           meta.WorkerRole.String(),
+		Provider:             meta.Provider.String(),
+		Model:                meta.Model,
+		TaskSummary:          meta.TaskSummary,
+		TaskChangedPaths:     append([]string(nil), meta.TaskChangedPaths...),
+		TaskChecksRun:        append([]string(nil), meta.TaskChecksRun...),
+		TaskEvidencePointers: append([]string(nil), meta.TaskEvidencePointers...),
+		TaskFollowups:        append([]string(nil), meta.TaskFollowups...),
+		TaskErrorKind:        meta.TaskErrorKind,
+		StartedAt:            meta.StartedAt,
+		UpdatedAt:            meta.UpdatedAt,
+		FinalizedAt:          meta.FinalizedAt,
+	}
+}
+
+func writeSubagentStartPayload(path string, task domain.TaskView) error {
+	data, err := json.MarshalIndent(task, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal subagent start payload: %w", err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+		return fmt.Errorf("write subagent start payload: %w", err)
+	}
+	return nil
 }
 
 func streamExecRun(ctx context.Context, service *orchestrator.Service, runID string, stdin io.Reader, writer io.Writer) error {

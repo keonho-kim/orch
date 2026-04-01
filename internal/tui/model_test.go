@@ -132,6 +132,25 @@ func TestSlashMenuEnterCompletesSelectedCommand(t *testing.T) {
 	}
 }
 
+func TestStatusCommandOpensInfoModal(t *testing.T) {
+	t.Parallel()
+
+	model := testModel(80, 24)
+	model.input.SetValue("/status")
+
+	updatedModel, cmd := model.updateDashboard(tea.KeyMsg{Type: tea.KeyEnter})
+	updated := updatedModel.(Model)
+	if cmd != nil {
+		t.Fatal("did not expect async command for /status")
+	}
+	if !updated.showInfoModal {
+		t.Fatal("expected /status to open the info modal")
+	}
+	if updated.infoTitle != "STATUS" {
+		t.Fatalf("unexpected info title: %q", updated.infoTitle)
+	}
+}
+
 func tallModel() Model {
 	model := testModel(80, 18)
 	model.snapshot.CurrentThinking = strings.Repeat("thinking line\n", 8)

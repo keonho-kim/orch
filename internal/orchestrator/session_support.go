@@ -3,7 +3,10 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/keonho-kim/orch/domain"
 	"github.com/keonho-kim/orch/internal/adapters"
@@ -121,6 +124,66 @@ func (s *Service) appendSessionTool(runID string, result domain.ToolResult) erro
 	return nil
 }
 
+func (s *Service) appendSessionContextSnapshot(runID string, snapshot domain.ContextSnapshot) error {
+	s.mu.Lock()
+	meta := s.currentSession
+	s.mu.Unlock()
+
+	updated, err := s.sessions.AppendContextSnapshot(meta, runID, snapshot)
+	if err != nil {
+		return err
+	}
+	s.setCurrentSessionIfActive(updated)
+	return nil
+}
+
+func (s *Service) updateCurrentSessionTaskMetadata(
+	status string,
+	summary string,
+	changedPaths []string,
+	checksRun []string,
+	evidencePointers []string,
+	followups []string,
+	errorKind string,
+) error {
+	s.mu.Lock()
+	meta := s.currentSession
+	if meta.WorkerRole == "" {
+		meta.WorkerRole = s.agentRole
+	}
+	if trimmed := strings.TrimSpace(status); trimmed != "" {
+		meta.TaskStatus = trimmed
+	}
+	if trimmed := strings.TrimSpace(summary); trimmed != "" && strings.TrimSpace(meta.TaskSummary) == "" {
+		meta.TaskSummary = trimmed
+	}
+	if len(changedPaths) > 0 && len(meta.TaskChangedPaths) == 0 {
+		meta.TaskChangedPaths = normalizeTaskValues(changedPaths)
+	}
+	if len(checksRun) > 0 && len(meta.TaskChecksRun) == 0 {
+		meta.TaskChecksRun = normalizeTaskValues(checksRun)
+	}
+	if len(evidencePointers) > 0 && len(meta.TaskEvidencePointers) == 0 {
+		normalized := normalizeTaskValues(evidencePointers)
+		if err := s.validateTaskEvidencePointers(normalized); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		meta.TaskEvidencePointers = normalized
+	}
+	if len(followups) > 0 && len(meta.TaskFollowups) == 0 {
+		meta.TaskFollowups = normalizeTaskValues(followups)
+	}
+	if trimmed := strings.TrimSpace(errorKind); trimmed != "" && strings.TrimSpace(meta.TaskErrorKind) == "" {
+		meta.TaskErrorKind = trimmed
+	}
+	meta.UpdatedAt = time.Now()
+	s.currentSession = meta
+	s.mu.Unlock()
+
+	return s.sessions.SaveMetadata(meta)
+}
+
 func (s *Service) setCurrentSessionIfActive(meta domain.SessionMetadata) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -219,4 +282,41 @@ func (s *Service) runChatHistoryAssistantSummary(sessionID string, runID string,
 	if err := s.sessions.AppendChatHistoryAssistantSummary(context.Background(), meta, runID, content); err != nil {
 		_ = s.appendRunEvent(runID, "chat_history", fmt.Sprintf("Could not append assistant chatHistory summary: %v", err))
 	}
+}
+
+func normalizeTaskValues(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+	return normalized
+}
+
+func (s *Service) validateTaskEvidencePointers(values []string) error {
+	for _, value := range values {
+		pointer, err := session.ParseOTPointer(value)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(pointer.SessionID) == "" {
+			continue
+		}
+		path := filepath.Join(s.paths.SessionsDir, pointer.SessionID+".jsonl")
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("evidence pointer session %s not found", pointer.SessionID)
+			}
+			return fmt.Errorf("stat evidence pointer session %s: %w", pointer.SessionID, err)
+		}
+	}
+	return nil
 }

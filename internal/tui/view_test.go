@@ -59,6 +59,9 @@ func TestViewShowsSlashCommandDropdown(t *testing.T) {
 	if !strings.Contains(view, "/compact  Compact current session") {
 		t.Fatalf("expected compact slash menu item in view, got %q", view)
 	}
+	if !strings.Contains(view, "/status  Show current session status") {
+		t.Fatalf("expected status slash menu item in view, got %q", view)
+	}
 }
 
 func TestDashboardViewFitsViewport(t *testing.T) {

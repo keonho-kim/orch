@@ -99,15 +99,15 @@ func NewChatGPTClient() Client {
 }
 
 func ToolCatalog(mode domain.RunMode, role domain.AgentRole) []ToolDefinition {
-	allowedOps := []string{"read", "list", "search"}
-	description := "Run one OT operation. Allowed operations in this mode are read, list, and search."
+	allowedOps := []string{"context", "task_list", "task_get", "read", "list", "search"}
+	description := "Run one OT operation. Allowed operations in this mode are context, task_list, task_get, read, list, and search."
 	if mode != domain.RunModePlan {
 		if role == domain.AgentRoleWorker {
-			allowedOps = []string{"read", "list", "search", "write", "patch", "check", "complete", "fail"}
-			description = "Run one worker OT operation. Allowed operations are read, list, search, write, patch, check, complete, and fail."
+			allowedOps = []string{"context", "task_list", "task_get", "read", "list", "search", "write", "patch", "check", "complete", "fail"}
+			description = "Run one worker OT operation. Allowed operations are context, task_list, task_get, read, list, search, write, patch, check, complete, and fail."
 		} else {
-			allowedOps = []string{"delegate", "read", "list", "search"}
-			description = "Run one gateway OT operation. Allowed operations are delegate, read, list, and search."
+			allowedOps = []string{"context", "task_list", "task_get", "delegate", "read", "list", "search"}
+			description = "Run one gateway OT operation. Allowed operations are context, task_list, task_get, delegate, read, list, and search."
 		}
 	}
 
@@ -130,10 +130,18 @@ func ToolCatalog(mode domain.RunMode, role domain.AgentRole) []ToolDefinition {
 					"type": "string",
 					"enum": []string{"go_test", "go_vet", "golangci_lint"},
 				},
-				"task_id":       map[string]any{"type": "string"},
-				"task_title":    map[string]any{"type": "string"},
-				"task_contract": map[string]any{"type": "string"},
-				"message":       map[string]any{"type": "string"},
+				"task_id":           map[string]any{"type": "string"},
+				"task_title":        map[string]any{"type": "string"},
+				"task_contract":     map[string]any{"type": "string"},
+				"message":           map[string]any{"type": "string"},
+				"wait":              map[string]any{"type": "boolean"},
+				"status_filter":     map[string]any{"type": "string"},
+				"summary":           map[string]any{"type": "string"},
+				"changed_paths":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"checks_run":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"evidence_pointers": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"followups":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"error_kind":        map[string]any{"type": "string"},
 			},
 			"required": []string{"op"},
 		}),

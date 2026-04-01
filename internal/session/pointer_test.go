@@ -13,6 +13,25 @@ func TestFormatAndParseOTPointerRoundTrip(t *testing.T) {
 	if len(pointer.Lines) != 3 || pointer.Lines[0] != 1 || pointer.Lines[1] != 2 || pointer.Lines[2] != 3 {
 		t.Fatalf("unexpected lines: %+v", pointer.Lines)
 	}
+	if pointer.SessionID != "" {
+		t.Fatalf("did not expect current-session pointer to carry session id: %+v", pointer)
+	}
+}
+
+func TestFormatAndParseCrossSessionOTPointerRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	value := FormatOTPointerForSession("S2", []int64{7, 3, 7})
+	pointer, err := ParseOTPointer(value)
+	if err != nil {
+		t.Fatalf("parse ot pointer: %v", err)
+	}
+	if pointer.SessionID != "S2" {
+		t.Fatalf("unexpected session id: %+v", pointer)
+	}
+	if len(pointer.Lines) != 2 || pointer.Lines[0] != 3 || pointer.Lines[1] != 7 {
+		t.Fatalf("unexpected lines: %+v", pointer.Lines)
+	}
 }
 
 func TestParseOTPointerRejectsInvalidValue(t *testing.T) {

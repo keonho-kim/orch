@@ -45,6 +45,9 @@ func (m Model) View() string {
 	if m.showHistoryPicker {
 		return renderViewport(m.renderCompactPage(width, m.renderHistoryPickerLines(width)), width, height)
 	}
+	if m.showInfoModal {
+		return renderViewport(m.renderCompactPage(width, m.renderInfoModalLines(width)), width, height)
+	}
 	if m.settings.visible {
 		return renderViewport(m.renderPageWithHeader(width, m.renderSettingsLines(width)), width, height)
 	}
@@ -193,7 +196,19 @@ func (m Model) renderHistoryPickerLines(width int) []string {
 		if title == "" {
 			title = "Untitled session"
 		}
-		lines = append(lines, fitLine(prefix+session.SessionID+"  "+title, width))
+		lines = append(lines, fitLine(prefix+formatHistorySessionRow(session, title), width))
+	}
+	return lines
+}
+
+func (m Model) renderInfoModalLines(width int) []string {
+	lines := []string{
+		sectionHeader(fallbackText(m.infoTitle, "INFO"), width),
+		"",
+		fitLine("Enter/Esc: Close", width),
+	}
+	for _, line := range m.infoLines {
+		lines = append(lines, fitLine(line, width))
 	}
 	return lines
 }
@@ -212,6 +227,28 @@ func (m Model) statusLine() string {
 		return "Open Settings and configure a provider model."
 	}
 	return "Ready."
+}
+
+func formatHistorySessionRow(session domain.SessionMetadata, title string) string {
+	parts := []string{session.SessionID, title}
+	if strings.TrimSpace(session.ParentSessionID) != "" {
+		parts = append(parts, "child-of "+session.ParentSessionID)
+	}
+	if session.WorkerRole != "" {
+		parts = append(parts, session.WorkerRole.DisplayName())
+	}
+	if strings.TrimSpace(session.TaskStatus) != "" {
+		parts = append(parts, session.TaskStatus)
+	}
+	if strings.TrimSpace(session.TaskTitle) != "" {
+		parts = append(parts, session.TaskTitle)
+	}
+	provider := strings.TrimSpace(session.Provider.DisplayName())
+	model := strings.TrimSpace(session.Model)
+	if provider != "" || model != "" {
+		parts = append(parts, strings.TrimSpace(provider+"/"+model))
+	}
+	return strings.Join(parts, "  ")
 }
 
 func renderStyledLines(output string, width int, emptyPlaceholder string) []string {

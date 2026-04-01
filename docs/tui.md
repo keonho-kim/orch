@@ -58,7 +58,10 @@ Current slash commands:
 | --- | --- |
 | `/clear` | open a new session and clear the visible conversation |
 | `/compact` | force session compaction |
+| `/context` | show the latest persisted context snapshot for the active run |
 | `/exit` | quit the application |
+| `/status` | show current session and active-run status, including child-task counts |
+| `/tasks` | list direct child tasks for the current session or inspect a specific task |
 
 ## Approval Modal
 
@@ -87,6 +90,14 @@ Picker behavior:
 - `Esc` closes the picker
 
 The picker lists saved sessions by session id and title.
+
+Rows now also surface lineage-aware task metadata when available:
+
+- `child-of <session-id>` for delegated worker sessions
+- worker role
+- task status
+- task title
+- provider and model
 
 ## Settings Modal
 

@@ -134,6 +134,9 @@ func NewService(
 			return service.settings.ConfigFor(provider)
 		},
 	})
+	if executor != nil {
+		executor.SetStateResolvers(service.contextSnapshotForRun, service.listTasksForRun, service.getTaskForRun)
+	}
 
 	if err := service.bootstrap(options); err != nil {
 		return nil, err
@@ -299,6 +302,28 @@ func (s *Service) LatestSessionID() (string, error) {
 	return s.sessions.LatestSessionID()
 }
 
+func (s *Service) CurrentContextSnapshot() (domain.ContextSnapshot, error) {
+	s.mu.RLock()
+	sessionID := s.currentSession.SessionID
+	runID := s.currentRun
+	s.mu.RUnlock()
+	return s.sessions.LatestContextSnapshot(sessionID, runID)
+}
+
+func (s *Service) ListCurrentTasks(statusFilter string) ([]domain.TaskView, error) {
+	s.mu.RLock()
+	sessionID := s.currentSession.SessionID
+	s.mu.RUnlock()
+	return s.sessions.ListTasks(sessionID, "", statusFilter)
+}
+
+func (s *Service) GetCurrentTask(taskID string) (domain.TaskView, error) {
+	s.mu.RLock()
+	sessionID := s.currentSession.SessionID
+	s.mu.RUnlock()
+	return s.sessions.GetTask(sessionID, taskID)
+}
+
 func (s *Service) RestoreSession(sessionID string) error {
 	if strings.TrimSpace(sessionID) == "" {
 		return fmt.Errorf("session id is required")
@@ -389,6 +414,18 @@ func (s *Service) currentSessionID() string {
 	defer s.mu.RUnlock()
 
 	return s.currentSession.SessionID
+}
+
+func (s *Service) contextSnapshotForRun(record domain.RunRecord) (domain.ContextSnapshot, error) {
+	return s.sessions.LatestContextSnapshot(record.SessionID, record.RunID)
+}
+
+func (s *Service) listTasksForRun(record domain.RunRecord, statusFilter string) ([]domain.TaskView, error) {
+	return s.sessions.ListTasks(record.SessionID, "", statusFilter)
+}
+
+func (s *Service) getTaskForRun(record domain.RunRecord, taskID string) (domain.TaskView, error) {
+	return s.sessions.GetTask(record.SessionID, taskID)
 }
 
 func (s *Service) NeedsSettingsConfiguration() bool {

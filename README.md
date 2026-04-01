@@ -107,11 +107,16 @@ Provider notes:
 - gateway and worker receive different OT capabilities
 - `bootstrap/USER.md` is shared user memory across sessions in the workspace
 - `.orch/chatHistory.md` is shared conversation memory with session-tagged entries and bounded prompt loading
+- delegated child worker sessions are exposed as first-class tasks derived from session metadata
+- each run persists a context snapshot so the active prompt inputs can be inspected later
 
 ## OT Contract
 
 Gateway OT operations:
 
+- `context`
+- `task_list`
+- `task_get`
 - `delegate`
 - `read`
 - `list`
@@ -119,6 +124,9 @@ Gateway OT operations:
 
 Worker OT operations:
 
+- `context`
+- `task_list`
+- `task_get`
 - `read`
 - `list`
 - `search`
@@ -130,6 +138,9 @@ Worker OT operations:
 
 Plan mode remains read-only and allows only:
 
+- `context`
+- `task_list`
+- `task_get`
 - `read`
 - `list`
 - `search`

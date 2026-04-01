@@ -162,6 +162,14 @@ func (m *Manager) LoadMetadata(sessionID string) (domain.SessionMetadata, error)
 }
 
 func (m *Manager) ListSessions(limit int) ([]domain.SessionMetadata, error) {
+	return m.listMetadata(limit, false)
+}
+
+func (m *Manager) ListMetadata(limit int) ([]domain.SessionMetadata, error) {
+	return m.listMetadata(limit, true)
+}
+
+func (m *Manager) listMetadata(limit int, includeMetadataOnly bool) ([]domain.SessionMetadata, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -180,15 +188,17 @@ func (m *Manager) ListSessions(limit int) ([]domain.SessionMetadata, error) {
 		}
 
 		sessionID := strings.TrimSuffix(entry.Name(), ".meta.json")
-		recordInfo, err := os.Stat(m.recordsPath(sessionID))
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("stat session record file: %w", err)
-		}
-		if recordInfo.Size() == 0 {
-			continue
+		if !includeMetadataOnly {
+			recordInfo, err := os.Stat(m.recordsPath(sessionID))
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("stat session record file: %w", err)
+			}
+			if recordInfo.Size() == 0 {
+				continue
+			}
 		}
 		meta, err := m.LoadMetadata(sessionID)
 		if err != nil {

@@ -97,7 +97,7 @@ func TestToolCatalogIsRoleAwareAndOTOnly(t *testing.T) {
 	}
 
 	plan := ToolCatalog(domain.RunModePlan, domain.AgentRoleGateway)
-	if !strings.Contains(plan[0].Function.Description, "read, list, and search") {
+	if !strings.Contains(plan[0].Function.Description, "context, task_list, task_get, read, list, and search") {
 		t.Fatalf("expected plan read-only description, got %q", plan[0].Function.Description)
 	}
 }

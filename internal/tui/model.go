@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -30,6 +32,9 @@ type Model struct {
 	showHistoryPicker   bool
 	historySessions     []domain.SessionMetadata
 	historySessionIndex int
+	showInfoModal       bool
+	infoTitle           string
+	infoLines           []string
 	slashMenuIndex      int
 	settings            settingsModalState
 }
@@ -137,6 +142,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.showHistoryPicker {
 			return m.updateHistoryPicker(message)
+		}
+		if m.showInfoModal {
+			return m.updateInfoModal(message)
 		}
 		if m.settings.visible {
 			return m.updateSettings(message)
@@ -247,6 +255,27 @@ func (m Model) updateDashboard(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.messageHistoryDraft = ""
 				return m, compactSessionCmd(m.service)
 			}
+			if command.kind == commandStatus {
+				m.input.SetValue("")
+				m.messageHistoryIndex = -1
+				m.messageHistoryDraft = ""
+				m.openStatusInfo()
+				return m, nil
+			}
+			if command.kind == commandContext {
+				m.input.SetValue("")
+				m.messageHistoryIndex = -1
+				m.messageHistoryDraft = ""
+				m.openContextInfo()
+				return m, nil
+			}
+			if command.kind == commandTasks {
+				m.input.SetValue("")
+				m.messageHistoryIndex = -1
+				m.messageHistoryDraft = ""
+				m.openTasksInfo(command.arg)
+				return m, nil
+			}
 			if value == "" {
 				return m, nil
 			}
@@ -351,6 +380,16 @@ func (m Model) updateHistoryPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		sessionID := m.historySessions[m.historySessionIndex].SessionID
 		m.showHistoryPicker = false
 		return m, restoreSessionCmd(m.service, sessionID)
+	}
+	return m, nil
+}
+
+func (m Model) updateInfoModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "enter":
+		m.showInfoModal = false
+		m.statusMessage = m.infoTitle + " closed."
+		return m, nil
 	}
 	return m, nil
 }
@@ -465,6 +504,166 @@ func clearSessionCmd(service *orchestrator.Service) tea.Cmd {
 		}
 		return nil
 	}
+}
+
+func (m *Model) openStatusInfo() {
+	lines := []string{
+		"Session ID: " + fallbackText(strings.TrimSpace(m.snapshot.CurrentSession.SessionID), "none"),
+		"Session Title: " + fallbackText(strings.TrimSpace(m.snapshot.CurrentSession.Title), "Untitled session"),
+		"Current Run: " + fallbackText(strings.TrimSpace(m.snapshot.CurrentRunID), "none"),
+		"Mode: " + m.composerMode.DisplayName(),
+		"Provider: " + fallbackText(strings.TrimSpace(m.snapshot.Settings.DefaultProvider.DisplayName()), "UNSET"),
+		"Model: " + fallbackText(strings.TrimSpace(m.snapshot.Settings.ConfigFor(m.snapshot.Settings.DefaultProvider).Model), "UNSET"),
+		"Pending Approval: " + yesNo(m.snapshot.PendingApproval != nil),
+		fmt.Sprintf("Compacted Through Seq: %d", m.snapshot.CurrentSession.LastCompactedSeq),
+		fmt.Sprintf("Tokens Since Compact: %d", m.snapshot.CurrentSession.TokensSinceCompact),
+		fmt.Sprintf("Total Tokens: %d", m.snapshot.CurrentSession.TotalTokens),
+	}
+
+	taskCounts := map[string]int{}
+	if m.service != nil {
+		tasks, err := m.service.ListCurrentTasks("")
+		if err != nil {
+			m.statusMessage = err.Error()
+			return
+		}
+		for _, task := range tasks {
+			taskCounts[task.Status]++
+		}
+	}
+	lines = append(lines, "Direct Child Tasks:")
+	for _, status := range []string{
+		domain.TaskStatusQueued,
+		domain.TaskStatusRunning,
+		domain.TaskStatusCompleted,
+		domain.TaskStatusFailed,
+		domain.TaskStatusCancelled,
+	} {
+		lines = append(lines, fmt.Sprintf("- %s: %d", status, taskCounts[status]))
+	}
+	m.openInfoModal("STATUS", lines)
+}
+
+func (m *Model) openContextInfo() {
+	if m.service == nil {
+		m.statusMessage = "Context view is unavailable without a service."
+		return
+	}
+	snapshot, err := m.service.CurrentContextSnapshot()
+	if err != nil {
+		m.statusMessage = err.Error()
+		return
+	}
+	m.openInfoModal("CONTEXT", formatContextSnapshotLines(snapshot))
+}
+
+func (m *Model) openTasksInfo(arg string) {
+	if m.service == nil {
+		m.statusMessage = "Task view is unavailable without a service."
+		return
+	}
+	taskID := strings.TrimSpace(arg)
+	if taskID == "" {
+		tasks, err := m.service.ListCurrentTasks("")
+		if err != nil {
+			m.statusMessage = err.Error()
+			return
+		}
+		m.openInfoModal("TASKS", formatTaskListLines(tasks))
+		return
+	}
+	task, err := m.service.GetCurrentTask(taskID)
+	if err != nil {
+		m.statusMessage = err.Error()
+		return
+	}
+	m.openInfoModal("TASK "+taskID, formatTaskDetailLines(task))
+}
+
+func (m *Model) openInfoModal(title string, lines []string) {
+	m.showInfoModal = true
+	m.infoTitle = strings.TrimSpace(title)
+	m.infoLines = append([]string(nil), lines...)
+	m.statusMessage = strings.TrimSpace(title) + " opened."
+}
+
+func formatContextSnapshotLines(snapshot domain.ContextSnapshot) []string {
+	return []string{
+		"Session ID: " + snapshot.SessionID,
+		"Run ID: " + snapshot.RunID,
+		"Provider: " + snapshot.Provider,
+		"Model: " + snapshot.Model,
+		"Workspace: " + snapshot.WorkspacePath,
+		"CWD: " + snapshot.CurrentCwd,
+		fmt.Sprintf("Compact Summary Present: %s", yesNo(snapshot.CompactSummaryPresent)),
+		fmt.Sprintf("Post-Compact Record Count: %d", snapshot.PostCompactRecordCount),
+		fmt.Sprintf("Inherited Summary Present: %s", yesNo(snapshot.InheritedSummaryPresent)),
+		fmt.Sprintf("Inherited Record Count: %d", snapshot.InheritedRecordCount),
+		"Selected Skills: " + fallbackText(strings.Join(snapshot.SelectedSkills, ", "), "(none)"),
+		fmt.Sprintf("Resolved References: %d", snapshot.ResolvedReferenceCount),
+		fmt.Sprintf("User Memory Present: %s", yesNo(snapshot.UserMemoryPresent)),
+		fmt.Sprintf("Chat History Excerpt Bytes: %d", snapshot.ChatHistoryExcerptBytes),
+		fmt.Sprintf("Plan Cache Present: %s", yesNo(snapshot.PlanCachePresent)),
+	}
+}
+
+func formatTaskListLines(tasks []domain.TaskView) []string {
+	if len(tasks) == 0 {
+		return []string{"No direct child tasks for the current session."}
+	}
+	sort.Slice(tasks, func(i int, j int) bool {
+		return tasks[i].StartedAt.Before(tasks[j].StartedAt)
+	})
+	lines := make([]string, 0, len(tasks)+1)
+	lines = append(lines, "Direct child tasks:")
+	for _, task := range tasks {
+		lines = append(lines, fmt.Sprintf(
+			"- %s | %s | %s | %s/%s",
+			fallbackText(task.TaskID, "(no task id)"),
+			fallbackText(task.Status, domain.TaskStatusQueued),
+			fallbackText(task.Title, "(untitled task)"),
+			fallbackText(task.Provider, "unknown"),
+			fallbackText(task.Model, "unknown"),
+		))
+	}
+	return lines
+}
+
+func formatTaskDetailLines(task domain.TaskView) []string {
+	lines := []string{
+		"Task ID: " + fallbackText(task.TaskID, "(none)"),
+		"Title: " + fallbackText(task.Title, "(untitled task)"),
+		"Status: " + fallbackText(task.Status, domain.TaskStatusQueued),
+		"Parent Session: " + fallbackText(task.ParentSessionID, "(none)"),
+		"Parent Run: " + fallbackText(task.ParentRunID, "(none)"),
+		"Child Session: " + fallbackText(task.ChildSessionID, "(none)"),
+		"Child Run: " + fallbackText(task.ChildRunID, "(none)"),
+		"Worker Role: " + fallbackText(task.WorkerRole, "(none)"),
+		"Provider: " + fallbackText(task.Provider, "unknown"),
+		"Model: " + fallbackText(task.Model, "unknown"),
+		"Summary: " + fallbackText(task.TaskSummary, "(none)"),
+		"Changed Paths: " + fallbackText(strings.Join(task.TaskChangedPaths, ", "), "(none)"),
+		"Checks Run: " + fallbackText(strings.Join(task.TaskChecksRun, ", "), "(none)"),
+		"Evidence Pointers: " + fallbackText(strings.Join(task.TaskEvidencePointers, ", "), "(none)"),
+		"Followups: " + fallbackText(strings.Join(task.TaskFollowups, " | "), "(none)"),
+		"Error Kind: " + fallbackText(task.TaskErrorKind, "(none)"),
+		"Final Output Excerpt: " + fallbackText(task.FinalOutputExcerpt, "(none)"),
+	}
+	return lines
+}
+
+func yesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
+}
+
+func fallbackText(value string, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func restoreSessionCmd(service *orchestrator.Service, sessionID string) tea.Cmd {

@@ -11,9 +11,24 @@ import (
 	"github.com/keonho-kim/orch/domain"
 	"github.com/keonho-kim/orch/internal/adapters"
 	"github.com/keonho-kim/orch/internal/prompts"
+	"github.com/keonho-kim/orch/internal/session"
 	"github.com/keonho-kim/orch/internal/tooling"
 	"github.com/keonho-kim/orch/internal/userprefs"
 )
+
+type iterationInputs struct {
+	record             domain.RunRecord
+	toolsDoc           string
+	userMemory         string
+	chatHistory        string
+	selectedSkills     []selectedSkill
+	resolvedReferences string
+	activePlan         domain.PlanCache
+	draftPlan          string
+	meta               domain.SessionMetadata
+	currentContext     session.Context
+	inheritedContext   session.Context
+}
 
 func (s *Service) executeRun(ctx context.Context, runID string) {
 	record, ok := s.RunRecord(runID)
@@ -56,8 +71,13 @@ func (s *Service) executeRun(ctx context.Context, runID string) {
 			return
 		}
 
-		contextMessage, err := s.buildIterationContext(state.record, state.selectedSkills, state.resolvedRefs, snapshot.ActivePlan, strings.TrimSpace(state.draft))
+		inputs, err := s.loadIterationInputs(state.record, state.selectedSkills, state.resolvedRefs, snapshot.ActivePlan, strings.TrimSpace(state.draft))
 		if err != nil {
+			_ = s.failRun(runID, err)
+			return
+		}
+		contextMessage := inputs.prompt()
+		if err := s.appendSessionContextSnapshot(runID, inputs.snapshot()); err != nil {
 			_ = s.failRun(runID, err)
 			return
 		}
@@ -268,6 +288,27 @@ func (s *Service) recordToolExecution(
 	if err := s.appendSessionTool(runID, toolResult); err != nil {
 		return false, err
 	}
+	record, ok := s.RunRecord(runID)
+	if ok && record.AgentRole == domain.AgentRoleWorker && (execution.TerminalStatus != "" || hasStructuredTaskOutcome(execution)) {
+		status := ""
+		switch execution.TerminalStatus {
+		case domain.StatusCompleted:
+			status = domain.TaskStatusCompleted
+		case domain.StatusFailed:
+			status = domain.TaskStatusFailed
+		}
+		if err := s.updateCurrentSessionTaskMetadata(
+			status,
+			execution.TaskSummary,
+			execution.TaskChangedPaths,
+			execution.TaskChecksRun,
+			execution.TaskEvidencePointers,
+			execution.TaskFollowups,
+			execution.TaskErrorKind,
+		); err != nil {
+			return false, err
+		}
+	}
 
 	switch execution.TerminalStatus {
 	case domain.StatusCompleted:
@@ -425,7 +466,7 @@ func (s *Service) completeRun(runID string) error {
 		content = output
 	}
 	if record.AgentRole == domain.AgentRoleWorker {
-		_ = s.updateCurrentSessionTaskStatus("completed")
+		_ = s.updateCurrentSessionTaskMetadata(domain.TaskStatusCompleted, content, nil, nil, nil, nil, "")
 	}
 	go s.runChatHistoryAssistantSummary(record.SessionID, record.RunID, content)
 	go s.runSessionMaintenance(record.SessionID)
@@ -453,7 +494,7 @@ func (s *Service) failRun(runID string, err error) error {
 		return err
 	}
 	if record.AgentRole == domain.AgentRoleWorker {
-		_ = s.updateCurrentSessionTaskStatus("failed")
+		_ = s.updateCurrentSessionTaskMetadata(domain.TaskStatusFailed, err.Error(), nil, nil, nil, nil, "run_failed")
 	}
 	_ = s.appendRunEvent(runID, "error", err.Error())
 	s.publish(UIEvent{RunID: runID, Message: err.Error()})
@@ -485,7 +526,7 @@ func (s *Service) cancelRun(runID string, err error) error {
 		return err
 	}
 	if record.AgentRole == domain.AgentRoleWorker {
-		_ = s.updateCurrentSessionTaskStatus("cancelled")
+		_ = s.updateCurrentSessionTaskMetadata(domain.TaskStatusCancelled, message, nil, nil, nil, nil, "")
 	}
 	_ = s.appendRunEvent(runID, "cancel", message)
 	s.publish(UIEvent{RunID: runID, Message: message})
@@ -500,39 +541,58 @@ func (s *Service) state(runID string) (*runState, bool) {
 	return state, ok
 }
 
-func (s *Service) buildIterationContext(record domain.RunRecord, selectedSkills []selectedSkill, resolvedReferences string, activePlan domain.PlanCache, draftPlan string) (string, error) {
+func (s *Service) loadIterationInputs(record domain.RunRecord, selectedSkills []selectedSkill, resolvedReferences string, activePlan domain.PlanCache, draftPlan string) (iterationInputs, error) {
 	toolsDoc, err := readWorkspaceFile(record.WorkspacePath, filepath.Join("bootstrap", "TOOLS.md"))
 	if err != nil {
-		return "", err
+		return iterationInputs{}, err
 	}
 	user, err := loadUserMemory(record.WorkspacePath, record.AgentRole)
 	if err != nil {
-		return "", err
+		return iterationInputs{}, err
 	}
 	chatHistory, err := s.loadChatHistoryMemory(record.AgentRole)
 	if err != nil {
-		return "", err
+		return iterationInputs{}, err
 	}
 
-	meta, err := s.sessions.LoadMetadata(record.SessionID)
-	if err != nil && strings.TrimSpace(record.SessionID) != "" {
-		return "", err
+	meta := domain.SessionMetadata{}
+	currentContext := session.Context{}
+	if strings.TrimSpace(record.SessionID) != "" {
+		meta, err = s.sessions.LoadMetadata(record.SessionID)
+		if err != nil {
+			return iterationInputs{}, err
+		}
+		currentContext, err = s.sessions.Context(meta)
+		if err != nil {
+			return iterationInputs{}, err
+		}
 	}
 
-	return prompts.IterationContext(
-		record,
-		record.AgentRole,
-		toolsDoc,
-		user,
-		chatHistory,
-		formatSelectedSkills(selectedSkills),
-		resolvedReferences,
-		activePlan,
-		draftPlan,
-		meta.TaskTitle,
-		meta.TaskContract,
-		meta.TaskStatus,
-	), nil
+	s.mu.RLock()
+	inherited := s.inheritedCtx
+	s.mu.RUnlock()
+
+	return iterationInputs{
+		record:             record,
+		toolsDoc:           toolsDoc,
+		userMemory:         user,
+		chatHistory:        chatHistory,
+		selectedSkills:     selectedSkills,
+		resolvedReferences: resolvedReferences,
+		activePlan:         activePlan,
+		draftPlan:          draftPlan,
+		meta:               meta,
+		currentContext:     currentContext,
+		inheritedContext:   inherited,
+	}, nil
+}
+
+func (s *Service) buildIterationContext(record domain.RunRecord, selectedSkills []selectedSkill, resolvedReferences string, activePlan domain.PlanCache, draftPlan string) (string, error) {
+	inputs, err := s.loadIterationInputs(record, selectedSkills, resolvedReferences, activePlan, draftPlan)
+	if err != nil {
+		return "", err
+	}
+	return inputs.prompt(), nil
 }
 
 func (s *Service) buildSystemPrompt(record domain.RunRecord) (string, error) {
@@ -616,4 +676,71 @@ func formatToolResult(call domain.ToolCall, output string) string {
 
 func formatApprovalRequest(request domain.ApprovalRequest) string {
 	return fmt.Sprintf("%s: %s (%s)", request.Call.Name, request.Call.Arguments, request.Reason)
+}
+
+func (i iterationInputs) prompt() string {
+	return prompts.IterationContext(
+		i.record,
+		i.record.AgentRole,
+		i.toolsDoc,
+		i.userMemory,
+		i.chatHistory,
+		formatSelectedSkills(i.selectedSkills),
+		i.resolvedReferences,
+		i.activePlan,
+		i.draftPlan,
+		i.meta.TaskTitle,
+		i.meta.TaskContract,
+		i.meta.TaskStatus,
+	)
+}
+
+func (i iterationInputs) snapshot() domain.ContextSnapshot {
+	return domain.ContextSnapshot{
+		SessionID:               i.record.SessionID,
+		RunID:                   i.record.RunID,
+		Provider:                i.record.Provider.String(),
+		Model:                   i.record.Model,
+		WorkspacePath:           i.record.WorkspacePath,
+		CurrentCwd:              i.record.CurrentCwd,
+		CompactSummaryPresent:   strings.TrimSpace(i.currentContext.Summary) != "",
+		PostCompactRecordCount:  len(i.currentContext.Records),
+		InheritedSummaryPresent: strings.TrimSpace(i.inheritedContext.Summary) != "",
+		InheritedRecordCount:    len(i.inheritedContext.Records),
+		SelectedSkills:          selectedSkillNamesFromValues(i.selectedSkills),
+		ResolvedReferenceCount:  countResolvedReferenceLines(i.resolvedReferences),
+		UserMemoryPresent:       strings.TrimSpace(i.userMemory) != "",
+		ChatHistoryExcerptBytes: len(i.chatHistory),
+		PlanCachePresent:        strings.TrimSpace(i.activePlan.Content) != "",
+	}
+}
+
+func selectedSkillNamesFromValues(values []selectedSkill) []string {
+	names := make([]string, 0, len(values))
+	for _, item := range values {
+		if strings.TrimSpace(item.Name) == "" {
+			continue
+		}
+		names = append(names, item.Name)
+	}
+	return names
+}
+
+func countResolvedReferenceLines(value string) int {
+	count := 0
+	for _, line := range strings.Split(strings.TrimSpace(value), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "- ") {
+			count++
+		}
+	}
+	return count
+}
+
+func hasStructuredTaskOutcome(execution tooling.Execution) bool {
+	return strings.TrimSpace(execution.TaskSummary) != "" ||
+		len(execution.TaskChangedPaths) > 0 ||
+		len(execution.TaskChecksRun) > 0 ||
+		len(execution.TaskEvidencePointers) > 0 ||
+		len(execution.TaskFollowups) > 0 ||
+		strings.TrimSpace(execution.TaskErrorKind) != ""
 }

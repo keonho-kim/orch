@@ -8,13 +8,21 @@ import (
 	"strings"
 )
 
-const otPointerScheme = "ot-pointer://current"
+const (
+	otPointerCurrentScheme = "ot-pointer://current"
+	otPointerSessionPrefix = "ot-pointer://session/"
+)
 
 type OTPointer struct {
-	Lines []int64
+	SessionID string
+	Lines     []int64
 }
 
 func FormatOTPointer(lines []int64) string {
+	return FormatOTPointerForSession("", lines)
+}
+
+func FormatOTPointerForSession(sessionID string, lines []int64) string {
 	normalized := normalizePointerLines(lines)
 	if len(normalized) == 0 {
 		return ""
@@ -25,18 +33,39 @@ func FormatOTPointer(lines []int64) string {
 		values = append(values, strconv.FormatInt(line, 10))
 	}
 
-	return otPointerScheme + "?lines=" + url.QueryEscape(strings.Join(values, ","))
+	base := otPointerCurrentScheme
+	if strings.TrimSpace(sessionID) != "" {
+		base = otPointerSessionPrefix + url.PathEscape(strings.TrimSpace(sessionID))
+	}
+	return base + "?lines=" + url.QueryEscape(strings.Join(values, ","))
 }
 
 func ParseOTPointer(value string) (OTPointer, error) {
 	trimmed := strings.TrimSpace(value)
-	if !strings.HasPrefix(trimmed, otPointerScheme) {
+	var pointer OTPointer
+	switch {
+	case strings.HasPrefix(trimmed, otPointerCurrentScheme):
+		if suffix := strings.TrimPrefix(trimmed, otPointerCurrentScheme); strings.HasPrefix(suffix, "/") {
+			return OTPointer{}, fmt.Errorf("cross-session ot pointers are not supported in current-session form")
+		}
+	case strings.HasPrefix(trimmed, otPointerSessionPrefix):
+		sessionPart := strings.TrimPrefix(trimmed, otPointerSessionPrefix)
+		sessionPart, _, _ = strings.Cut(sessionPart, "?")
+		sessionID, err := url.PathUnescape(strings.TrimSpace(sessionPart))
+		if err != nil || strings.TrimSpace(sessionID) == "" || strings.Contains(sessionID, "/") {
+			return OTPointer{}, fmt.Errorf("invalid ot pointer session")
+		}
+		pointer.SessionID = sessionID
+	default:
 		return OTPointer{}, fmt.Errorf("invalid ot pointer")
 	}
 
-	queryPart := strings.TrimPrefix(trimmed, otPointerScheme)
-	if strings.HasPrefix(queryPart, "/") {
-		return OTPointer{}, fmt.Errorf("cross-session ot pointers are not supported")
+	queryPart := ""
+	if strings.HasPrefix(trimmed, otPointerCurrentScheme) {
+		queryPart = strings.TrimPrefix(trimmed, otPointerCurrentScheme)
+	} else {
+		_, queryPart, _ = strings.Cut(trimmed, "?")
+		queryPart = "?" + queryPart
 	}
 	queryPart = strings.TrimPrefix(queryPart, "?")
 	_, _, found := strings.Cut(trimmed, "?")
@@ -70,7 +99,8 @@ func ParseOTPointer(value string) (OTPointer, error) {
 	if len(lines) == 0 {
 		return OTPointer{}, fmt.Errorf("ot pointer lines are required")
 	}
-	return OTPointer{Lines: lines}, nil
+	pointer.Lines = lines
+	return pointer, nil
 }
 
 func normalizePointerLines(lines []int64) []int64 {
