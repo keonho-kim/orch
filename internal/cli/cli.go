@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -27,6 +26,7 @@ type command struct {
 	prompt           string
 	mode             domain.RunMode
 	repoRoot         string
+	configCommand    configCommandState
 	restoreSessionID string
 	showHistory      bool
 	restoreLatest    bool
@@ -47,6 +47,10 @@ func Run(args []string) error {
 		return runTUI(command.repoRoot, command.restoreSessionID, command.showHistory, command.restoreLatest)
 	case "exec":
 		return runExec(command.repoRoot, command.prompt, command.mode, os.Stdin, os.Stdout, os.Stderr)
+	case "config-list":
+		return runConfigList(command.repoRoot, command.configCommand, os.Stdout)
+	case "config-set":
+		return runConfigUpdate(command.repoRoot, command.configCommand)
 	case "__finalize-session":
 		return runFinalizeSession(command.repoRoot, command.finalizeSession)
 	case "__subagent-run":
@@ -103,6 +107,8 @@ func parseCommand(args []string) (command, error) {
 		default:
 			return command{name: "interactive", repoRoot: repoRoot, restoreSessionID: rest[0]}, nil
 		}
+	case "config":
+		return parseConfigCommand(args[1:])
 	case "__finalize-session":
 		if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
 			return command{}, fmt.Errorf("usage: orch __finalize-session <session-id> [workspace]")
@@ -212,8 +218,8 @@ func runExec(repoRoot string, prompt string, mode domain.RunMode, stdin io.Reade
 	if settings.DefaultProvider == "" {
 		return fmt.Errorf("default provider is not configured; run `orch` or edit orch.settings.json first")
 	}
-	if !settings.HasProviderModel(settings.DefaultProvider) {
-		return fmt.Errorf("model is not configured for %s; edit orch.settings.json first", settings.DefaultProvider.DisplayName())
+	if err := settings.ProviderConfigError(settings.DefaultProvider); err != nil {
+		return fmt.Errorf("%w; run `orch` or edit orch.settings.json first", err)
 	}
 
 	runID, err := app.service.SubmitPromptMode(prompt, mode)
@@ -235,12 +241,7 @@ type app struct {
 }
 
 func newApp(repoRoot string, options orchestrator.BootOptions) (*app, error) {
-	absoluteRepoRoot, err := filepath.Abs(repoRoot)
-	if err != nil {
-		return nil, fmt.Errorf("resolve working directory: %w", err)
-	}
-
-	paths, err := config.ResolvePaths(absoluteRepoRoot)
+	paths, err := resolveAppPaths(repoRoot)
 	if err != nil {
 		return nil, err
 	}

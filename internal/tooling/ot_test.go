@@ -248,6 +248,35 @@ func TestInspectOTPointerCapturesValue(t *testing.T) {
 	}
 }
 
+func TestResolveSubagentRepoRootDoesNotRequireProjectSettingsFile(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	bootstrapDir := filepath.Join(repoRoot, "runtime-asset", "bootstrap")
+	if err := os.MkdirAll(bootstrapDir, 0o755); err != nil {
+		t.Fatalf("create bootstrap dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bootstrapDir, "AGENTS.md"), []byte("# test\n"), 0o644); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "go.mod"), []byte("module example.com/test\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	workspace := filepath.Join(repoRoot, "test-workspace", "nested")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	resolved, err := resolveSubagentRepoRoot(workspace)
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	if resolved != repoRoot {
+		t.Fatalf("unexpected repo root: got %q want %q", resolved, repoRoot)
+	}
+}
+
 func containsAll(value string, expected ...string) bool {
 	for _, item := range expected {
 		if !strings.Contains(value, item) {

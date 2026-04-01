@@ -71,10 +71,10 @@ func New(service *orchestrator.Service) Model {
 		snapshot:            service.Snapshot(),
 		showThinking:        true,
 		followOutput:        true,
-		settings:            newSettingsModal(service.Snapshot().Settings),
+		settings:            newSettingsModalFromResolved(service.ConfigState()),
 	}
 	if model.needsSettingsConfiguration() {
-		model.settings = newSetupSettingsModal(model.snapshot.Settings)
+		model.settings = newSetupSettingsModalFromResolved(service.ConfigState())
 		model.statusMessage = "Configure a provider and model to start the first run."
 	}
 	model.syncChatViewport(true)
@@ -508,5 +508,5 @@ func (m Model) needsSettingsConfiguration() bool {
 	if settings.DefaultProvider == "" {
 		return true
 	}
-	return !settings.HasProviderModel(settings.DefaultProvider)
+	return !settings.IsProviderReady(settings.DefaultProvider)
 }

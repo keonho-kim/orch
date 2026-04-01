@@ -13,17 +13,17 @@ func TestSanitizeEnvPreservesExpectedKeys(t *testing.T) {
 	env := sanitizeEnv([]string{
 		"PATH=/usr/bin",
 		"HOME=/Users/test",
-		"VLLM_API_KEY=abc",
+		"CUSTOM_OPENAI_KEY=abc",
 		"ORCH_SUBAGENT_DEPTH=1",
 		"SECRET_TOKEN=skip",
-	})
+	}, []string{"CUSTOM_OPENAI_KEY"})
 
 	joined := strings.Join(env, "\n")
 	if !strings.Contains(joined, "PATH=/usr/bin") {
 		t.Fatalf("expected PATH to be preserved")
 	}
-	if !strings.Contains(joined, "VLLM_API_KEY=abc") {
-		t.Fatalf("expected vllm api key env to be preserved")
+	if !strings.Contains(joined, "CUSTOM_OPENAI_KEY=abc") {
+		t.Fatalf("expected configured api key env to be preserved")
 	}
 	if !strings.Contains(joined, "ORCH_SUBAGENT_DEPTH=1") {
 		t.Fatalf("expected subagent depth env to be preserved")
@@ -69,7 +69,7 @@ func TestProvisionCopiesBootstrapFilesWithoutClaudeMirror(t *testing.T) {
 		}
 	}
 
-	provisioned, err := Provision(root, assets, []string{"PATH=/usr/bin"})
+	provisioned, err := Provision(root, assets, []string{"PATH=/usr/bin"}, nil)
 	if err != nil {
 		t.Fatalf("provision workspace: %v", err)
 	}

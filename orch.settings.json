@@ -9,10 +9,41 @@
       "base_url": "http://localhost:8000/v1",
       "model": "",
       "api_key_env": "VLLM_API_KEY"
+    },
+    "gemini": {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "model": "",
+      "api_key_env": "GEMINI_API_KEY"
+    },
+    "vertex": {
+      "base_url": "https://aiplatform.googleapis.com/v1",
+      "model": "",
+      "api_key_env": "GOOGLE_API_KEY"
+    },
+    "bedrock": {
+      "base_url": "",
+      "model": "",
+      "api_key_env": "AWS_BEARER_TOKEN_BEDROCK"
+    },
+    "claude": {
+      "base_url": "https://api.anthropic.com/v1",
+      "model": "",
+      "api_key_env": "ANTHROPIC_API_KEY"
+    },
+    "azure": {
+      "base_url": "",
+      "model": "",
+      "api_key_env": "AZURE_OPENAI_API_KEY"
+    },
+    "chatgpt": {
+      "base_url": "https://api.openai.com/v1",
+      "model": "",
+      "api_key_env": "OPENAI_API_KEY"
     }
   },
   "approval_policy": "confirm_mutations",
   "self_driving_mode": false,
   "react_ralph_iter": 3,
-  "plan_ralph_iter": 3
+  "plan_ralph_iter": 3,
+  "compact_threshold_k": 100
 }

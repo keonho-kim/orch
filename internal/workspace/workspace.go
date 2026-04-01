@@ -14,7 +14,7 @@ type ProvisionedWorkspace struct {
 	Env  []string
 }
 
-func Provision(root string, bootstrapAssets string, baseEnv []string) (ProvisionedWorkspace, error) {
+func Provision(root string, bootstrapAssets string, baseEnv []string, allowedSecretEnv []string) (ProvisionedWorkspace, error) {
 	bootstrapDir := filepath.Join(root, "bootstrap")
 	toolsDir := filepath.Join(root, "tools")
 	for _, path := range []string{root, bootstrapDir, toolsDir} {
@@ -30,7 +30,7 @@ func Provision(root string, bootstrapAssets string, baseEnv []string) (Provision
 
 	return ProvisionedWorkspace{
 		Root: root,
-		Env:  sanitizeEnv(baseEnv),
+		Env:  sanitizeEnv(baseEnv, allowedSecretEnv),
 	}, nil
 }
 
@@ -148,7 +148,7 @@ func syncDirectory(source string, target string) error {
 	})
 }
 
-func sanitizeEnv(baseEnv []string) []string {
+func sanitizeEnv(baseEnv []string, allowedSecretEnv []string) []string {
 	allowedPrefixes := []string{
 		"GIT_",
 		"GO",
@@ -171,7 +171,13 @@ func sanitizeEnv(baseEnv []string) []string {
 		"TMPDIR":              {},
 		"USER":                {},
 		"USERNAME":            {},
-		"VLLM_API_KEY":        {},
+	}
+	for _, key := range allowedSecretEnv {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		allowedKeys[key] = struct{}{}
 	}
 
 	filtered := make([]string, 0, len(baseEnv))

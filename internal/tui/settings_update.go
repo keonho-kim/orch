@@ -8,15 +8,22 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/config"
 	"github.com/keonho-kim/orch/internal/orchestrator"
 )
 
 func (m *Model) openSettings() {
 	needsConfiguration := m.needsSettingsConfiguration()
-	if needsConfiguration {
-		m.settings = newSetupSettingsModal(m.snapshot.Settings)
+	var resolved config.ResolvedSettings
+	if m.service != nil {
+		resolved = m.service.ConfigState()
 	} else {
-		m.settings = newSettingsModal(m.snapshot.Settings)
+		resolved = resolvedSettingsForModal(m.snapshot.Settings, config.ScopeProject)
+	}
+	if needsConfiguration {
+		m.settings = newSetupSettingsModalFromResolved(resolved)
+	} else {
+		m.settings = newSettingsModalFromResolved(resolved)
 		m.settings.visible = true
 	}
 	m.settings.resize(max(20, m.viewportWidth()-24))
@@ -61,11 +68,11 @@ func (m Model) updateSettingsForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if pending != "" && pending != form.provider {
 				form.setProvider(pending)
 				form.focusField(fieldProvider)
-				if !form.providerHasModel(form.provider) {
+				if missing := form.missingProviderFields(m.snapshot.Settings, form.provider); len(missing) > 0 {
 					m.statusMessage = fmt.Sprintf(
-						"Provider changed to %s. Configure the %s Model before saving settings.",
+						"Provider changed to %s. Configure %s before saving settings.",
 						form.provider.DisplayName(),
-						form.provider.DisplayName(),
+						describeMissingProviderConfiguration(form.provider, missing),
 					)
 				} else {
 					m.statusMessage = fmt.Sprintf("Provider changed to %s.", form.provider.DisplayName())
@@ -82,8 +89,27 @@ func (m Model) updateSettingsForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.settings.visible = false
 		}
 		return m, nil
+	case "tab":
+		m.settings.setScope(nextSettingsScope(m.settings.scope, 1))
+		m.settings.resize(max(20, m.viewportWidth()-24))
+		return m, nil
+	case "shift+tab":
+		m.settings.setScope(nextSettingsScope(m.settings.scope, -1))
+		m.settings.resize(max(20, m.viewportWidth()-24))
+		return m, nil
 	case "ctrl+c":
 		return m, tea.Quit
+	case "ctrl+u":
+		if !form.isEditable() {
+			m.statusMessage = fmt.Sprintf("%s scope is read-only.", settingsScopeLabel(m.settings.scope))
+			return m, nil
+		}
+		if form.fieldLocked(form.focus) {
+			m.statusMessage = "Managed settings cannot be overridden in this scope."
+			return m, nil
+		}
+		m.statusMessage = form.unsetFocusedField()
+		return m, nil
 	case "down":
 		form.focusNext()
 		return m, nil
@@ -93,21 +119,37 @@ func (m Model) updateSettingsForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "left", "right":
 		switch form.focus {
 		case fieldProvider:
-			target := domain.ProviderOllama
-			if form.provider == domain.ProviderOllama {
-				target = domain.ProviderVLLM
+			if !form.isEditable() {
+				return m, nil
 			}
-			if target != form.provider {
+			if form.fieldLocked(fieldProvider) {
+				m.statusMessage = "Managed settings cannot be overridden in this scope."
+				return m, nil
+			}
+			step := 1
+			if msg.String() == "left" {
+				step = -1
+			}
+			target := nextProvider(form.displayProvider(), step)
+			if target != form.displayProvider() {
 				form.beginProviderConfirmation(target)
 				m.statusMessage = fmt.Sprintf(
 					"Confirm provider change: %s -> %s.",
-					form.provider.DisplayName(),
+					form.displayProvider().DisplayName(),
 					target.DisplayName(),
 				)
 			}
 			return m, nil
 		case fieldSelfDriving:
+			if !form.isEditable() {
+				return m, nil
+			}
+			if form.fieldLocked(fieldSelfDriving) {
+				m.statusMessage = "Managed settings cannot be overridden in this scope."
+				return m, nil
+			}
 			form.selfDriving = !form.selfDriving
+			form.selfDrivingSet = true
 			if form.selfDriving {
 				m.statusMessage = "Self-driving mode enabled."
 			} else {
@@ -116,21 +158,33 @@ func (m Model) updateSettingsForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case "enter":
-		settings := form.buildSettings(m.snapshot.Settings)
-		if !settings.HasProviderModel(settings.DefaultProvider) {
+		if !form.isEditable() {
+			m.statusMessage = fmt.Sprintf("%s scope is read-only.", settingsScopeLabel(m.settings.scope))
+			return m, nil
+		}
+		preview := form.previewResolved()
+		settings := preview.Effective
+		if missing := settings.MissingProviderFields(settings.DefaultProvider); len(missing) > 0 {
 			m.statusMessage = fmt.Sprintf(
-				"Provider changed to %s, but settings cannot be saved until the %s Model is configured.",
+				"Provider changed to %s, but settings cannot be saved until %s is configured.",
 				settings.DefaultProvider.DisplayName(),
-				settings.DefaultProvider.DisplayName(),
+				describeMissingProviderConfiguration(settings.DefaultProvider, missing),
 			)
 			return m, nil
 		}
 		m.snapshot.Settings = settings
+		m.settings.resolved = preview
 		m.settings.visible = false
-		return m, saveSettingsCmd(m.service, settings)
+		return m, saveScopeSettingsCmd(m.service, m.settings.scope, form.buildScopeSettings())
 	}
 
 	if !form.isTextField(form.focus) {
+		return m, nil
+	}
+	if !form.isEditable() {
+		return m, nil
+	}
+	if form.fieldLocked(form.focus) {
 		return m, nil
 	}
 
@@ -155,10 +209,10 @@ func (m Model) updateSettingsSetup(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return m, tea.Quit
 		case "left", "up":
-			form.setProvider(domain.ProviderOllama)
+			form.setProvider(nextProvider(form.provider, -1))
 			return m, nil
 		case "right", "down":
-			form.setProvider(domain.ProviderVLLM)
+			form.setProvider(nextProvider(form.provider, 1))
 			return m, nil
 		case "enter":
 			if form.provider == domain.ProviderOllama {
@@ -167,8 +221,8 @@ func (m Model) updateSettingsSetup(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.settings.useFormMode()
-			form.focusField(fieldVLLMBaseURL)
-			m.statusMessage = "Configure vLLM settings."
+			form.focusField(form.providerPrimaryField(form.provider))
+			m.statusMessage = fmt.Sprintf("Configure %s settings.", form.provider.DisplayName())
 			return m, nil
 		}
 	case settingsSetupStepOllamaURL:
@@ -234,16 +288,20 @@ func (m Model) updateSettingsSetup(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			settings.Normalize()
 			m.snapshot.Settings = settings
 			m.settings.visible = false
-			return m, saveSettingsCmd(m.service, settings)
+			userScope := config.ScopeSettingsFromDomainSettings(settings)
+			return m, saveScopeSettingsCmd(m.service, config.ScopeUser, userScope)
 		}
 	}
 
 	return m, nil
 }
 
-func saveSettingsCmd(service *orchestrator.Service, settings domain.Settings) tea.Cmd {
+func saveScopeSettingsCmd(service *orchestrator.Service, scope config.Scope, settings config.ScopeSettings) tea.Cmd {
 	return func() tea.Msg {
-		if err := service.SaveSettings(settings); err != nil {
+		if service == nil {
+			return nil
+		}
+		if err := service.SaveScopeSettings(scope, settings); err != nil {
 			return operationErrMsg{err: err}
 		}
 		return nil

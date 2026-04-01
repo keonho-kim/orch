@@ -34,6 +34,7 @@ type Service struct {
 
 	mu             sync.RWMutex
 	settings       domain.Settings
+	configState    config.ResolvedSettings
 	history        []string
 	runs           map[string]*runState
 	currentRun     string
@@ -112,8 +113,14 @@ func NewService(
 		paths:     paths,
 		agentRole: normalizeAgentRole(options.AgentRole),
 		clients: map[domain.Provider]adapters.Client{
-			domain.ProviderOllama: adapters.NewOllamaClient(),
-			domain.ProviderVLLM:   adapters.NewVLLMClient(),
+			domain.ProviderOllama:  adapters.NewOllamaClient(),
+			domain.ProviderVLLM:    adapters.NewVLLMClient(),
+			domain.ProviderGemini:  adapters.NewGeminiClient(),
+			domain.ProviderVertex:  adapters.NewVertexClient(),
+			domain.ProviderBedrock: adapters.NewBedrockClient(),
+			domain.ProviderClaude:  adapters.NewClaudeClient(),
+			domain.ProviderAzure:   adapters.NewAzureClient(),
+			domain.ProviderChatGPT: adapters.NewChatGPTClient(),
 		},
 		runs:    make(map[string]*runState),
 		updates: make(chan UIEvent, 256),
@@ -143,19 +150,11 @@ func normalizeAgentRole(role domain.AgentRole) domain.AgentRole {
 }
 
 func (s *Service) bootstrap(options BootOptions) error {
-	settings, err := config.LoadSettings(s.paths)
+	resolvedSettings, err := config.LoadResolvedSettings(s.paths)
 	if err != nil {
 		return err
 	}
-	if settings.DefaultProvider == "" {
-		stored, err := s.store.LoadSettings(s.ctx)
-		if err == nil && stored.DefaultProvider != "" {
-			settings.DefaultProvider = stored.DefaultProvider
-			if err := config.SaveSettings(s.paths, settings); err != nil {
-				return err
-			}
-		}
-	}
+	settings := resolvedSettings.Effective
 
 	historyEntries, err := s.store.ListMessageHistory(s.ctx, historyLimit)
 	if err != nil {
@@ -209,6 +208,7 @@ func (s *Service) bootstrap(options BootOptions) error {
 	defer s.mu.Unlock()
 
 	s.settings = settings
+	s.configState = resolvedSettings
 	s.activePlan = planCache
 	s.currentSession = currentSession
 	s.inheritedCtx = inheritedCtx
@@ -345,10 +345,10 @@ func (s *Service) OpenNewSession() error {
 	if settings.DefaultProvider == "" {
 		return fmt.Errorf("default provider is not configured")
 	}
-	model := strings.TrimSpace(settings.ConfigFor(settings.DefaultProvider).Model)
-	if model == "" {
-		return fmt.Errorf("model is not configured for %s", settings.DefaultProvider.DisplayName())
+	if err := settings.ProviderConfigError(settings.DefaultProvider); err != nil {
+		return err
 	}
+	model := strings.TrimSpace(settings.ConfigFor(settings.DefaultProvider).Model)
 
 	newSession, err := s.sessions.Create(
 		s.paths.RepoRoot,
@@ -398,32 +398,79 @@ func (s *Service) NeedsSettingsConfiguration() bool {
 	if s.settings.DefaultProvider == "" {
 		return true
 	}
-	return !s.settings.HasProviderModel(s.settings.DefaultProvider)
+	return !s.settings.IsProviderReady(s.settings.DefaultProvider)
 }
 
 func (s *Service) SaveSettings(settings domain.Settings) error {
-	settings.Normalize()
-	if settings.DefaultProvider != "" {
-		if _, err := domain.ParseProvider(settings.DefaultProvider.String()); err != nil {
-			return err
-		}
-	}
+	return s.SaveScopeSettings(config.ScopeProject, config.ScopeSettingsFromDomainSettings(settings))
+}
 
-	if err := config.SaveSettings(s.paths, settings); err != nil {
+func (s *Service) ConfigState() config.ResolvedSettings {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.configState
+}
+
+func (s *Service) SaveScopeSettings(scope config.Scope, settings config.ScopeSettings) error {
+	if err := s.migrateLegacyDefaultProvider(); err != nil {
 		return err
 	}
-	if settings.DefaultProvider != "" {
-		if err := s.store.SaveDefaultProvider(s.ctx, settings.DefaultProvider); err != nil {
+	if err := config.SaveScopeSettings(s.paths, scope, settings); err != nil {
+		return err
+	}
+	return s.reloadResolvedSettings(fmt.Sprintf("Settings saved to %s scope.", strings.Title(string(scope))))
+}
+
+func (s *Service) UnsetScopeSettings(scope config.Scope, keys []config.SettingKey) error {
+	if err := s.migrateLegacyDefaultProvider(); err != nil {
+		return err
+	}
+	if err := config.UnsetScopeSettings(s.paths, scope, keys); err != nil {
+		return err
+	}
+	return s.reloadResolvedSettings(fmt.Sprintf("Settings updated in %s scope.", strings.Title(string(scope))))
+}
+
+func (s *Service) reloadResolvedSettings(message string) error {
+	resolvedSettings, err := config.LoadResolvedSettings(s.paths)
+	if err != nil {
+		return err
+	}
+	if resolvedSettings.Effective.DefaultProvider != "" {
+		if err := s.store.SaveDefaultProvider(s.ctx, resolvedSettings.Effective.DefaultProvider); err != nil {
 			return err
 		}
 	}
 
 	s.mu.Lock()
-	s.settings = settings
+	s.settings = resolvedSettings.Effective
+	s.configState = resolvedSettings
 	s.mu.Unlock()
 
-	s.publish(UIEvent{Message: fmt.Sprintf("Settings saved. Default provider: %s.", settings.DefaultProvider.DisplayName())})
+	s.publish(UIEvent{Message: message})
 	return nil
+}
+
+func (s *Service) migrateLegacyDefaultProvider() error {
+	s.mu.RLock()
+	resolved := s.configState
+	s.mu.RUnlock()
+	if _, ok := resolved.Sources[config.KeyDefaultProvider]; ok {
+		return nil
+	}
+
+	stored, err := s.store.LoadSettings(s.ctx)
+	if err != nil || stored.DefaultProvider == "" {
+		return nil
+	}
+
+	userSettings, err := config.LoadScopeSettings(s.paths, config.ScopeUser)
+	if err != nil {
+		return err
+	}
+	provider := stored.DefaultProvider.String()
+	userSettings.DefaultProvider = &provider
+	return config.SaveScopeSettings(s.paths, config.ScopeUser, userSettings)
 }
 
 func (s *Service) DiscoverOllama(ctx context.Context, baseURL string) (string, []string, error) {
@@ -448,11 +495,10 @@ func (s *Service) SubmitPromptMode(prompt string, mode domain.RunMode) (string, 
 	if settings.DefaultProvider == "" {
 		return "", fmt.Errorf("default provider is not configured")
 	}
-
-	providerSettings := settings.ConfigFor(settings.DefaultProvider)
-	if strings.TrimSpace(providerSettings.Model) == "" {
-		return "", fmt.Errorf("model is not configured for %s", settings.DefaultProvider.DisplayName())
+	if err := settings.ProviderConfigError(settings.DefaultProvider); err != nil {
+		return "", err
 	}
+	providerSettings := settings.ConfigFor(settings.DefaultProvider)
 
 	if err := s.store.AddMessageHistory(s.ctx, trimmed); err != nil {
 		return "", err
@@ -467,6 +513,7 @@ func (s *Service) SubmitPromptMode(prompt string, mode domain.RunMode) (string, 
 		s.paths.TestWorkspace,
 		s.paths.BootstrapAssets,
 		os.Environ(),
+		settings.SecretEnvNames(),
 	)
 	if err != nil {
 		return "", err

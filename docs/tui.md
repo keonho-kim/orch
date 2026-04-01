@@ -25,6 +25,8 @@ Current first-run behavior:
 - provider is chosen first
 - choosing `Ollama` enters URL selection and live model discovery
 - choosing `vLLM` switches to the manual settings form
+- choosing other cloud providers switches to the manual settings form
+- the setup flow saves into the `user` scope
 - the user cannot start runs until the default provider has a configured model
 
 The status line reflects that requirement until settings are saved.
@@ -92,15 +94,62 @@ The picker lists saved sessions by session id and title.
 
 Current settings UI supports:
 
+- scope tabs for `Effective`, `Managed`, `User`, `Project`, and `Local`
 - default provider selection
 - `self_driving_mode`
 - Ollama base URL and model
 - vLLM base URL, model, and API key env name
+- Gemini base URL, model, and API key env name
+- Vertex base URL, model, and API key env name
+- Bedrock base URL, model, and API key env name
+- Claude base URL, model, and API key env name
+- Azure base URL, deployment name, and API key env name
+- ChatGPT base URL, model, and API key env name
 - `react_ralph_iter`
 - `plan_ralph_iter`
 - `compact_threshold_k`
 
+The `Effective` and `Managed` tabs are read-only. The editable tabs show scope-local values and use inherited placeholders for lower-scope values. `Ctrl+U` unsets the focused field in the active editable scope so the effective value falls back to a lower layer. If a field is enforced by managed settings, lower scopes show it as locked.
+
+The first-run setup flow still keeps Ollama discovery, but all cloud providers enter the manual settings form directly and the first saved settings go to the `user` scope.
+
 Changing providers inside the full form requires an explicit confirmation step.
+
+The same provider/model state can also be inspected and updated outside the TUI:
+
+- `orch config --list`
+- `orch config --list --scope <managed|user|project|local|effective>`
+- `orch config --list --show-origin`
+- `orch config --scope <user|project|local> --provider=ollama --model=<name>`
+- `orch config --scope <user|project|local> --ollama-base-url=<url>`
+- `orch config --scope <user|project|local> --ollama-model=<name>`
+- `orch config --scope <user|project|local> --vllm-base-url=<url>`
+- `orch config --scope <user|project|local> --vllm-model=<name>`
+- `orch config --scope <user|project|local> --vllm-api-key-env=<env>`
+- `orch config --scope <user|project|local> --gemini-base-url=<url>`
+- `orch config --scope <user|project|local> --gemini-model=<name>`
+- `orch config --scope <user|project|local> --gemini-api-key-env=<env>`
+- `orch config --scope <user|project|local> --vertex-base-url=<url>`
+- `orch config --scope <user|project|local> --vertex-model=<name>`
+- `orch config --scope <user|project|local> --vertex-api-key-env=<env>`
+- `orch config --scope <user|project|local> --bedrock-base-url=<url>`
+- `orch config --scope <user|project|local> --bedrock-model=<name>`
+- `orch config --scope <user|project|local> --bedrock-api-key-env=<env>`
+- `orch config --scope <user|project|local> --claude-base-url=<url>`
+- `orch config --scope <user|project|local> --claude-model=<name>`
+- `orch config --scope <user|project|local> --claude-api-key-env=<env>`
+- `orch config --scope <user|project|local> --azure-base-url=<url>`
+- `orch config --scope <user|project|local> --azure-model=<deployment>`
+- `orch config --scope <user|project|local> --azure-api-key-env=<env>`
+- `orch config --scope <user|project|local> --chatgpt-base-url=<url>`
+- `orch config --scope <user|project|local> --chatgpt-model=<name>`
+- `orch config --scope <user|project|local> --chatgpt-api-key-env=<env>`
+- `orch config --scope <user|project|local> --approval-policy=<policy>`
+- `orch config --scope <user|project|local> --self-driving-mode=<true|false>`
+- `orch config --scope <user|project|local> --react-ralph-iter=<n>`
+- `orch config --scope <user|project|local> --plan-ralph-iter=<n>`
+- `orch config --scope <user|project|local> --compact-threshold-k=<n>`
+- `orch config --scope <user|project|local> --unset <key>`
 
 ## Thinking Visibility
 

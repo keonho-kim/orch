@@ -6,6 +6,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/config"
 )
 
 func TestSettingsNavigationUsesUpDown(t *testing.T) {
@@ -27,23 +28,29 @@ func TestSettingsNavigationUsesUpDown(t *testing.T) {
 	}
 }
 
-func TestSettingsTabDoesNotMoveFocus(t *testing.T) {
+func TestSettingsTabChangesScopeAndResetsFocus(t *testing.T) {
 	t.Parallel()
 
 	model := testModel(80, 24)
 	model.settings.visible = true
+	model.settings.form.focusField(fieldOllamaBaseURL)
 
 	updatedModel, _ := model.updateSettings(tea.KeyMsg{Type: tea.KeyTab})
 	updated := updatedModel.(Model)
+	if updated.settings.scope != config.ScopeLocal {
+		t.Fatalf("expected tab to move to Local scope, got %s", updated.settings.scope)
+	}
 	if updated.settings.form.focus != fieldProvider {
-		t.Fatalf("expected tab to leave focus on provider, got %v", updated.settings.form.focus)
+		t.Fatalf("expected tab to reset focus to provider, got %v", updated.settings.form.focus)
 	}
 
-	updated.settings.form.focusField(fieldOllamaBaseURL)
 	updatedModel, _ = updated.updateSettings(tea.KeyMsg{Type: tea.KeyShiftTab})
 	updated = updatedModel.(Model)
-	if updated.settings.form.focus != fieldOllamaBaseURL {
-		t.Fatalf("expected shift+tab to leave focus unchanged, got %v", updated.settings.form.focus)
+	if updated.settings.scope != config.ScopeProject {
+		t.Fatalf("expected shift+tab to move back to Project scope, got %s", updated.settings.scope)
+	}
+	if updated.settings.form.focus != fieldProvider {
+		t.Fatalf("expected shift+tab to reset focus to provider, got %v", updated.settings.form.focus)
 	}
 }
 
@@ -129,7 +136,7 @@ func TestSettingsLeftRightTogglesSelfDriving(t *testing.T) {
 	}
 }
 
-func TestSettingsNavigationSkipsHiddenProviderFields(t *testing.T) {
+func TestSettingsNavigationIncludesAllProviderFields(t *testing.T) {
 	t.Parallel()
 
 	model := testModel(80, 24)
@@ -151,14 +158,14 @@ func TestSettingsNavigationSkipsHiddenProviderFields(t *testing.T) {
 	updated.settings.form.focusField(fieldProvider)
 	updatedModel, _ = updated.updateSettings(tea.KeyMsg{Type: tea.KeyDown})
 	updated = updatedModel.(Model)
-	if updated.settings.form.focus != fieldVLLMBaseURL {
-		t.Fatalf("expected focus to move to visible vLLM field, got %v", updated.settings.form.focus)
+	if updated.settings.form.focus != fieldOllamaBaseURL {
+		t.Fatalf("expected focus to move to the next field in the shared form, got %v", updated.settings.form.focus)
 	}
 
-	updatedModel, _ = updated.updateSettings(tea.KeyMsg{Type: tea.KeyUp})
+	updatedModel, _ = updated.updateSettings(tea.KeyMsg{Type: tea.KeyDown})
 	updated = updatedModel.(Model)
-	if updated.settings.form.focus != fieldProvider {
-		t.Fatalf("expected focus to move back to Provider from vLLM field, got %v", updated.settings.form.focus)
+	if updated.settings.form.focus != fieldOllamaModel {
+		t.Fatalf("expected focus to continue through provider fields, got %v", updated.settings.form.focus)
 	}
 }
 
@@ -371,5 +378,48 @@ func TestSettingsSaveShowsExplicitProviderConfigurationMessage(t *testing.T) {
 	}
 	if !updated.settings.visible {
 		t.Fatal("expected settings modal to remain open after rejected save")
+	}
+}
+
+func TestSettingsSetupSelectsGeminiAndEntersManualForm(t *testing.T) {
+	t.Parallel()
+
+	model := testModel(80, 24)
+	model.settings = newSetupSettingsModal(model.snapshot.Settings)
+	model.settings.form.setProvider(domain.ProviderVLLM)
+
+	updatedModel, _ := model.updateSettings(tea.KeyMsg{Type: tea.KeyRight})
+	updated := updatedModel.(Model)
+	if updated.settings.form.provider != domain.ProviderGemini {
+		t.Fatalf("expected provider selection to switch to Gemini, got %s", updated.settings.form.provider)
+	}
+
+	updatedModel, _ = updated.updateSettings(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = updatedModel.(Model)
+	if updated.settings.isSetup() {
+		t.Fatal("expected setup mode to switch to manual form for Gemini")
+	}
+	if updated.settings.form.focus != fieldGeminiModel {
+		t.Fatalf("expected Gemini setup to focus model, got %v", updated.settings.form.focus)
+	}
+}
+
+func TestSettingsSaveShowsAzureConfigurationMessage(t *testing.T) {
+	t.Parallel()
+
+	model := testModel(80, 24)
+	model.settings.visible = true
+	model.settings.form.setProvider(domain.ProviderAzure)
+	model.settings.form.focusField(fieldAzureModel)
+
+	updatedModel, cmd := model.updateSettings(tea.KeyMsg{Type: tea.KeyEnter})
+	updated := updatedModel.(Model)
+
+	if cmd != nil {
+		t.Fatal("did not expect save command when Azure is incomplete")
+	}
+	want := "Provider changed to Azure, but settings cannot be saved until Azure Base URL, Azure Model is configured."
+	if updated.statusMessage != want {
+		t.Fatalf("unexpected status message: %q", updated.statusMessage)
 	}
 }

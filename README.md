@@ -14,13 +14,88 @@ The runtime now centers on:
 
 | Area | Behavior |
 | --- | --- |
-| Primary interfaces | `orch`, `orch exec`, `orch history`, standalone `ot` |
+| Primary interfaces | `orch`, `orch exec`, `orch config`, `orch history`, standalone `ot` |
 | Roles | gateway and worker |
-| Providers | `ollama`, `vllm` |
+| Providers | `ollama`, `vllm`, `gemini`, `vertex`, `bedrock`, `claude`, `azure`, `chatgpt` |
 | Workspace | provisioned `test-workspace/` |
 | Session storage | `.orch/sessions/*.jsonl` + `.meta.json` |
 | Model-facing tool | `ot` only |
 | Continuity | compact summary + post-compact records |
+
+## Configuration
+
+`orch` now resolves settings from four JSON scopes:
+
+1. `managed`
+2. `local`
+3. `project`
+4. `user`
+5. built-in defaults
+
+`managed` is machine policy and is read-only from the CLI and TUI. CLI flags apply only to the current command and sit above the persisted scopes.
+
+Scope files:
+
+- `managed`: `/Library/Application Support/orch/managed-settings.json` on macOS, `/etc/orch/managed-settings.json` on Linux/WSL, `%ProgramData%/orch/managed-settings.json` on Windows, or `ORCH_MANAGED_SETTINGS=<path>` for test and development overrides
+- `user`: `${os.UserConfigDir()}/orch/settings.json`
+- `project`: `<repo>/orch.settings.json`
+- `local`: `<repo>/.orch/settings.local.json`
+
+Use the TUI settings flow for interactive setup, or use the CLI for inspection and updates:
+
+```bash
+orch config --list
+orch config --list --show-origin
+orch config --list --scope project
+orch config --scope user --provider=ollama --model=qwen3.5:35b
+orch config --scope project --ollama-base-url=http://localhost:11434/v1 --self-driving-mode=true
+orch config --scope local --chatgpt-model=gpt-4.1 --chatgpt-api-key-env=OPENAI_API_KEY
+orch config --scope local --unset providers.chatgpt.model
+orch config --scope project --azure-base-url=https://example.openai.azure.com --azure-model=my-deployment --azure-api-key-env=AZURE_OPENAI_API_KEY
+```
+
+`orch config --list` prints the effective normalized runtime settings as flat `key=value` lines. Use `--scope <managed|user|project|local|effective>` to inspect a single layer, `--show-origin` to append the source scope and file for each effective key, and `--unset <key>` on editable scopes to fall back to lower layers.
+
+Scope-less writes still target the `project` scope for backward compatibility.
+
+Supported write flags:
+
+- `--provider`
+- `--model` when paired with `--provider`
+- `--ollama-base-url`
+- `--ollama-model`
+- `--vllm-base-url`
+- `--vllm-model`
+- `--vllm-api-key-env`
+- `--gemini-base-url`
+- `--gemini-model`
+- `--gemini-api-key-env`
+- `--vertex-base-url`
+- `--vertex-model`
+- `--vertex-api-key-env`
+- `--bedrock-base-url`
+- `--bedrock-model`
+- `--bedrock-api-key-env`
+- `--claude-base-url`
+- `--claude-model`
+- `--claude-api-key-env`
+- `--azure-base-url`
+- `--azure-model`
+- `--azure-api-key-env`
+- `--chatgpt-base-url`
+- `--chatgpt-model`
+- `--chatgpt-api-key-env`
+- `--approval-policy`
+- `--self-driving-mode`
+- `--react-ralph-iter`
+- `--plan-ralph-iter`
+- `--compact-threshold-k`
+
+Provider notes:
+
+- `azure.model` is the Azure deployment name.
+- `vertex` uses Vertex AI Express Mode API-key auth.
+- `bedrock.base_url` must point at the regional Bedrock Mantle `/v1` endpoint.
 
 ## Key Runtime Changes
 

@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,15 +20,19 @@ const (
 )
 
 type Paths struct {
-	RepoRoot        string
-	RuntimeAssetDir string
-	BootstrapAssets string
-	SettingsFile    string
-	UserConfigDir   string
-	DBPath          string
-	TestWorkspace   string
-	LocalStateDir   string
-	SessionsDir     string
+	RepoRoot            string
+	RuntimeAssetDir     string
+	BootstrapAssets     string
+	SettingsFile        string
+	ProjectSettingsFile string
+	UserSettingsFile    string
+	LocalSettingsFile   string
+	ManagedSettingsFile string
+	UserConfigDir       string
+	DBPath              string
+	TestWorkspace       string
+	LocalStateDir       string
+	SessionsDir         string
 }
 
 func ResolvePaths(repoRoot string) (Paths, error) {
@@ -40,15 +43,19 @@ func ResolvePaths(repoRoot string) (Paths, error) {
 
 	userConfigDir := filepath.Join(configDir, appDirName)
 	return Paths{
-		RepoRoot:        repoRoot,
-		RuntimeAssetDir: filepath.Join(repoRoot, runtimeAssetDirName),
-		BootstrapAssets: filepath.Join(repoRoot, runtimeAssetDirName, bootstrapDirName),
-		SettingsFile:    filepath.Join(repoRoot, settingsFileName),
-		UserConfigDir:   userConfigDir,
-		DBPath:          filepath.Join(userConfigDir, dbFileName),
-		TestWorkspace:   filepath.Join(repoRoot, testWorkspaceName),
-		LocalStateDir:   filepath.Join(repoRoot, localStateDirName),
-		SessionsDir:     filepath.Join(repoRoot, localStateDirName, sessionsDirName),
+		RepoRoot:            repoRoot,
+		RuntimeAssetDir:     filepath.Join(repoRoot, runtimeAssetDirName),
+		BootstrapAssets:     filepath.Join(repoRoot, runtimeAssetDirName, bootstrapDirName),
+		SettingsFile:        filepath.Join(repoRoot, settingsFileName),
+		ProjectSettingsFile: filepath.Join(repoRoot, settingsFileName),
+		UserSettingsFile:    filepath.Join(userConfigDir, "settings.json"),
+		LocalSettingsFile:   filepath.Join(repoRoot, localStateDirName, "settings.local.json"),
+		ManagedSettingsFile: managedSettingsPath(),
+		UserConfigDir:       userConfigDir,
+		DBPath:              filepath.Join(userConfigDir, dbFileName),
+		TestWorkspace:       filepath.Join(repoRoot, testWorkspaceName),
+		LocalStateDir:       filepath.Join(repoRoot, localStateDirName),
+		SessionsDir:         filepath.Join(repoRoot, localStateDirName, sessionsDirName),
 	}, nil
 }
 
@@ -59,11 +66,11 @@ func EnsureRuntimePaths(paths Paths) error {
 		}
 	}
 
-	return EnsureSettingsFile(paths)
+	return nil
 }
 
 func EnsureSettingsFile(paths Paths) error {
-	if _, err := os.Stat(paths.SettingsFile); err == nil {
+	if _, err := os.Stat(paths.ProjectSettingsFile); err == nil {
 		return nil
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat settings file: %w", err)
@@ -73,40 +80,15 @@ func EnsureSettingsFile(paths Paths) error {
 }
 
 func LoadSettings(paths Paths) (domain.Settings, error) {
-	data, err := os.ReadFile(paths.SettingsFile)
+	resolved, err := LoadResolvedSettings(paths)
 	if err != nil {
-		return domain.Settings{}, fmt.Errorf("read settings file: %w", err)
+		return domain.Settings{}, err
 	}
-
-	var settings domain.Settings
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return domain.Settings{}, fmt.Errorf("parse settings file: %w", err)
-	}
-	settings.Normalize()
-
-	if settings.DefaultProvider != "" {
-		if _, err := domain.ParseProvider(settings.DefaultProvider.String()); err != nil {
-			return domain.Settings{}, fmt.Errorf("parse default provider: %w", err)
-		}
-	}
-
-	return settings, nil
+	return resolved.Effective, nil
 }
 
 func SaveSettings(paths Paths, settings domain.Settings) error {
-	settings.Normalize()
-
-	data, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal settings: %w", err)
-	}
-	data = append(data, '\n')
-
-	if err := os.WriteFile(paths.SettingsFile, data, 0o644); err != nil {
-		return fmt.Errorf("write settings file: %w", err)
-	}
-
-	return nil
+	return SaveScopeSettings(paths, ScopeProject, ScopeSettingsFromDomainSettings(settings))
 }
 
 func defaultSettings() domain.Settings {

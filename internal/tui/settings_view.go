@@ -16,14 +16,18 @@ func (m Model) renderSettingsLines(width int) []string {
 	lines := []string{
 		sectionHeader("SETTINGS", maxWidth),
 		"",
+		fitLine("Tab/Shift+Tab: Change Scope", maxWidth),
 		fitLine("Up/Down: Move Between Fields", maxWidth),
 		fitLine("Left/Right: Change Focused Value", maxWidth),
+		fitLine("Ctrl+U: Inherit Focused Field", maxWidth),
 		fitLine("Enter: Save  Esc: Cancel", maxWidth),
+		"",
+		fitLine(m.renderSettingsScopeTabs(), maxWidth),
 		"",
 	}
 
 	for index, group := range settingsFieldGroups {
-		fields := settingsFieldsForGroup(m.settings.form.provider, group)
+		fields := settingsFieldsForGroup(group)
 		if len(fields) == 0 {
 			continue
 		}
@@ -36,13 +40,13 @@ func (m Model) renderSettingsLines(width int) []string {
 		}
 	}
 
-	if !m.settings.form.providerHasModel(m.settings.form.provider) {
+	if missing := m.settings.form.missingProviderFields(m.snapshot.Settings, m.settings.form.provider); len(missing) > 0 {
 		lines = append(lines,
 			"",
 			fitLine(fmt.Sprintf(
-				"Selected provider %s is incomplete. Set the %s Model before saving.",
+				"Selected provider %s is incomplete. Configure %s before saving.",
 				m.settings.form.provider.DisplayName(),
-				m.settings.form.provider.DisplayName(),
+				describeMissingProviderConfiguration(m.settings.form.provider, missing),
 			), maxWidth),
 		)
 	}
@@ -68,27 +72,50 @@ func (m Model) renderSettingsField(field settingsField) string {
 	if m.settings.form.focus == field {
 		prefix = "> "
 	}
+	suffix := ""
+	if m.settings.form.fieldLocked(field) {
+		suffix = " [LOCKED]"
+	}
 
 	switch settingsFieldSpecs[field].kind {
 	case settingsFieldKindProvider:
-		selectedProvider := m.settings.form.provider
+		selectedProvider := m.settings.form.displayProvider()
 		if m.settings.form.hasProviderConfirmation() && m.settings.form.pendingProvider() != "" {
 			selectedProvider = m.settings.form.pendingProvider()
 		}
-		return prefix + label + ": " + renderSettingsProviderSelector(selectedProvider)
+		value := renderSettingsProviderSelector(selectedProvider)
+		if m.settings.form.isEditable() && !m.settings.form.providerSet {
+			value += "  (inherited)"
+		}
+		return prefix + label + ": " + value + suffix
 	case settingsFieldKindToggle:
-		value := m.settings.form.selfDriving
-		return prefix + label + ": " + onOffLabel(value)
+		value := onOffLabel(m.settings.form.displaySelfDriving())
+		if m.settings.form.isEditable() && !m.settings.form.selfDrivingSet {
+			value = "Inherited: " + value
+		}
+		return prefix + label + ": " + value + suffix
 	default:
-		return prefix + label + ": " + m.settings.form.inputs[field].View()
+		if !m.settings.form.isEditable() {
+			return prefix + label + ": " + m.settings.form.fieldDisplayValue(field) + suffix
+		}
+		return prefix + label + ": " + m.settings.form.inputs[field].View() + suffix
 	}
 }
 
 func renderSettingsProviderSelector(provider domain.Provider) string {
-	return strings.Join([]string{
-		renderProviderOption("Ollama", provider == domain.ProviderOllama),
-		renderProviderOption("vLLM", provider == domain.ProviderVLLM),
-	}, "  ")
+	options := make([]string, 0, len(domain.Providers()))
+	for _, candidate := range domain.Providers() {
+		options = append(options, renderProviderOption(candidate.DisplayName(), provider == candidate))
+	}
+	return strings.Join(options, "  ")
+}
+
+func (m Model) renderSettingsScopeTabs() string {
+	tabs := make([]string, 0, len(settingsScopeOrder))
+	for _, scope := range settingsScopeOrder {
+		tabs = append(tabs, renderProviderOption(settingsScopeLabel(scope), m.settings.scope == scope))
+	}
+	return strings.Join(tabs, "  ")
 }
 
 func onOffLabel(enabled bool) string {
@@ -110,16 +137,18 @@ func (m Model) renderSettingsSetupLines(width int) []string {
 
 	switch setup.step {
 	case settingsSetupStepProvider:
-		return []string{
+		lines := []string{
 			sectionHeader("SETUP", maxWidth),
 			"",
 			fitLine("Choose the provider for the first launch.", maxWidth),
 			fitLine("Left/Right or Up/Down: switch provider", maxWidth),
-			fitLine("Enter: continue", maxWidth),
+			fitLine("Enter: continue (saved to User scope)", maxWidth),
 			"",
-			fitLine(renderProviderOption("Ollama", m.settings.form.provider == domain.ProviderOllama), maxWidth),
-			fitLine(renderProviderOption("vLLM", m.settings.form.provider == domain.ProviderVLLM), maxWidth),
 		}
+		for _, provider := range domain.Providers() {
+			lines = append(lines, fitLine(renderProviderOption(provider.DisplayName(), m.settings.form.provider == provider), maxWidth))
+		}
+		return lines
 	case settingsSetupStepOllamaURL:
 		defaultSelected := setup.urlMode == ollamaURLDefault
 		customSelected := setup.urlMode == ollamaURLCustom

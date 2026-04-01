@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 
 	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/config"
 )
 
 type settingsField int
@@ -24,6 +25,24 @@ const (
 	fieldVLLMBaseURL
 	fieldVLLMModel
 	fieldVLLMAPIKeyEnv
+	fieldGeminiBaseURL
+	fieldGeminiModel
+	fieldGeminiAPIKeyEnv
+	fieldVertexBaseURL
+	fieldVertexModel
+	fieldVertexAPIKeyEnv
+	fieldBedrockBaseURL
+	fieldBedrockModel
+	fieldBedrockAPIKeyEnv
+	fieldClaudeBaseURL
+	fieldClaudeModel
+	fieldClaudeAPIKeyEnv
+	fieldAzureBaseURL
+	fieldAzureModel
+	fieldAzureAPIKeyEnv
+	fieldChatGPTBaseURL
+	fieldChatGPTModel
+	fieldChatGPTAPIKeyEnv
 	fieldReactRalphIter
 	fieldPlanRalphIter
 	fieldCompactThreshold
@@ -58,10 +77,9 @@ const (
 )
 
 type settingsFieldSpec struct {
-	label   string
-	kind    settingsFieldKind
-	group   settingsFieldGroup
-	visible func(provider domain.Provider) bool
+	label string
+	kind  settingsFieldKind
+	group settingsFieldGroup
 }
 
 type providerChangeConfirmation struct {
@@ -69,11 +87,15 @@ type providerChangeConfirmation struct {
 }
 
 type settingsFormState struct {
-	provider     domain.Provider
-	selfDriving  bool
-	focus        settingsField
-	inputs       map[settingsField]textinput.Model
-	confirmation *providerChangeConfirmation
+	scope          config.Scope
+	resolved       config.ResolvedSettings
+	provider       domain.Provider
+	providerSet    bool
+	selfDriving    bool
+	selfDrivingSet bool
+	focus          settingsField
+	inputs         map[settingsField]textinput.Model
+	confirmation   *providerChangeConfirmation
 }
 
 type settingsSetupState struct {
@@ -87,10 +109,12 @@ type settingsSetupState struct {
 }
 
 type settingsModalState struct {
-	visible bool
-	mode    settingsMode
-	form    settingsFormState
-	setup   settingsSetupState
+	visible  bool
+	mode     settingsMode
+	scope    config.Scope
+	resolved config.ResolvedSettings
+	form     settingsFormState
+	setup    settingsSetupState
 }
 
 var settingsFieldOrder = []settingsField{
@@ -101,6 +125,24 @@ var settingsFieldOrder = []settingsField{
 	fieldVLLMBaseURL,
 	fieldVLLMModel,
 	fieldVLLMAPIKeyEnv,
+	fieldGeminiBaseURL,
+	fieldGeminiModel,
+	fieldGeminiAPIKeyEnv,
+	fieldVertexBaseURL,
+	fieldVertexModel,
+	fieldVertexAPIKeyEnv,
+	fieldBedrockBaseURL,
+	fieldBedrockModel,
+	fieldBedrockAPIKeyEnv,
+	fieldClaudeBaseURL,
+	fieldClaudeModel,
+	fieldClaudeAPIKeyEnv,
+	fieldAzureBaseURL,
+	fieldAzureModel,
+	fieldAzureAPIKeyEnv,
+	fieldChatGPTBaseURL,
+	fieldChatGPTModel,
+	fieldChatGPTAPIKeyEnv,
 	fieldReactRalphIter,
 	fieldPlanRalphIter,
 	fieldCompactThreshold,
@@ -119,66 +161,73 @@ var settingsFieldGroupTitles = map[settingsFieldGroup]string{
 }
 
 var settingsFieldSpecs = map[settingsField]settingsFieldSpec{
-	fieldProvider:         {label: "Provider", kind: settingsFieldKindProvider, group: settingsFieldGroupProvider, visible: alwaysVisibleSettingsField},
-	fieldSelfDriving:      {label: "Self-Driving Mode", kind: settingsFieldKindToggle, group: settingsFieldGroupGeneral, visible: alwaysVisibleSettingsField},
-	fieldOllamaBaseURL:    {label: "Ollama Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider, visible: providerSettingsField(domain.ProviderOllama)},
-	fieldOllamaModel:      {label: "Ollama Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider, visible: providerSettingsField(domain.ProviderOllama)},
-	fieldVLLMBaseURL:      {label: "vLLM Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider, visible: providerSettingsField(domain.ProviderVLLM)},
-	fieldVLLMModel:        {label: "vLLM Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider, visible: providerSettingsField(domain.ProviderVLLM)},
-	fieldVLLMAPIKeyEnv:    {label: "vLLM API Key Env", kind: settingsFieldKindText, group: settingsFieldGroupProvider, visible: providerSettingsField(domain.ProviderVLLM)},
-	fieldReactRalphIter:   {label: "ReAct Ralph Iterations", kind: settingsFieldKindText, group: settingsFieldGroupRalph, visible: alwaysVisibleSettingsField},
-	fieldPlanRalphIter:    {label: "Plan Ralph Iterations", kind: settingsFieldKindText, group: settingsFieldGroupRalph, visible: alwaysVisibleSettingsField},
-	fieldCompactThreshold: {label: "Compact Threshold (k)", kind: settingsFieldKindText, group: settingsFieldGroupGeneral, visible: alwaysVisibleSettingsField},
+	fieldProvider:         {label: "Provider", kind: settingsFieldKindProvider, group: settingsFieldGroupProvider},
+	fieldSelfDriving:      {label: "Self-Driving Mode", kind: settingsFieldKindToggle, group: settingsFieldGroupGeneral},
+	fieldOllamaBaseURL:    {label: "Ollama Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldOllamaModel:      {label: "Ollama Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldVLLMBaseURL:      {label: "vLLM Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldVLLMModel:        {label: "vLLM Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldVLLMAPIKeyEnv:    {label: "vLLM API Key Env", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldGeminiBaseURL:    {label: "Gemini Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldGeminiModel:      {label: "Gemini Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldGeminiAPIKeyEnv:  {label: "Gemini API Key Env", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldVertexBaseURL:    {label: "Vertex Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldVertexModel:      {label: "Vertex Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldVertexAPIKeyEnv:  {label: "Vertex API Key Env", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldBedrockBaseURL:   {label: "Bedrock Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldBedrockModel:     {label: "Bedrock Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldBedrockAPIKeyEnv: {label: "Bedrock API Key Env", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldClaudeBaseURL:    {label: "Claude Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldClaudeModel:      {label: "Claude Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldClaudeAPIKeyEnv:  {label: "Claude API Key Env", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldAzureBaseURL:     {label: "Azure Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldAzureModel:       {label: "Azure Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldAzureAPIKeyEnv:   {label: "Azure API Key Env", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldChatGPTBaseURL:   {label: "ChatGPT Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldChatGPTModel:     {label: "ChatGPT Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldChatGPTAPIKeyEnv: {label: "ChatGPT API Key Env", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
+	fieldReactRalphIter:   {label: "ReAct Ralph Iterations", kind: settingsFieldKindText, group: settingsFieldGroupRalph},
+	fieldPlanRalphIter:    {label: "Plan Ralph Iterations", kind: settingsFieldKindText, group: settingsFieldGroupRalph},
+	fieldCompactThreshold: {label: "Compact Threshold (k)", kind: settingsFieldKindText, group: settingsFieldGroupGeneral},
 }
 
-func alwaysVisibleSettingsField(domain.Provider) bool {
-	return true
-}
-
-func providerSettingsField(provider domain.Provider) func(domain.Provider) bool {
-	return func(current domain.Provider) bool {
-		return current == provider
-	}
+var settingsScopeOrder = []config.Scope{
+	config.ScopeEffective,
+	config.ScopeManaged,
+	config.ScopeUser,
+	config.ScopeProject,
+	config.ScopeLocal,
 }
 
 func newSettingsModal(settings domain.Settings) settingsModalState {
+	return newSettingsModalFromResolved(resolvedSettingsForModal(settings, config.ScopeProject))
+}
+
+func newSettingsModalFromResolved(resolved config.ResolvedSettings) settingsModalState {
 	return settingsModalState{
-		mode:  settingsModeForm,
-		form:  newSettingsFormState(settings),
-		setup: newSettingsSetupState(settings),
+		mode:     settingsModeForm,
+		scope:    config.ScopeProject,
+		resolved: resolved,
+		form:     newSettingsFormStateForScope(resolved, config.ScopeProject),
+		setup:    newSettingsSetupState(resolved.Effective),
 	}
 }
 
 func newSetupSettingsModal(settings domain.Settings) settingsModalState {
-	modal := newSettingsModal(settings)
+	return newSetupSettingsModalFromResolved(resolvedSettingsForModal(settings, config.ScopeUser))
+}
+
+func newSetupSettingsModalFromResolved(resolved config.ResolvedSettings) settingsModalState {
+	modal := newSettingsModalFromResolved(resolved)
 	modal.visible = true
 	modal.mode = settingsModeSetup
+	modal.scope = config.ScopeUser
+	modal.form = newSettingsFormStateForScope(resolved, config.ScopeUser)
 	return modal
 }
 
 func newSettingsFormState(settings domain.Settings) settingsFormState {
-	settings.Normalize()
-	state := settingsFormState{
-		provider:    settings.DefaultProvider,
-		selfDriving: settings.SelfDrivingMode,
-		focus:       fieldProvider,
-		inputs:      make(map[settingsField]textinput.Model),
-	}
-	if state.provider == "" {
-		state.provider = domain.ProviderOllama
-	}
-
-	state.inputs[fieldOllamaBaseURL] = newSettingsInput("Ollama Base URL", settings.Providers.Ollama.BaseURL)
-	state.inputs[fieldOllamaModel] = newSettingsInput("Ollama Model", settings.Providers.Ollama.Model)
-	state.inputs[fieldVLLMBaseURL] = newSettingsInput("vLLM Base URL", settings.Providers.VLLM.BaseURL)
-	state.inputs[fieldVLLMModel] = newSettingsInput("vLLM Model", settings.Providers.VLLM.Model)
-	state.inputs[fieldVLLMAPIKeyEnv] = newSettingsInput("vLLM API Key Env", settings.Providers.VLLM.APIKeyEnv)
-	state.inputs[fieldReactRalphIter] = newSettingsInput("ReAct Ralph Iterations", strconv.Itoa(settings.ReactRalphIter))
-	state.inputs[fieldPlanRalphIter] = newSettingsInput("Plan Ralph Iterations", strconv.Itoa(settings.PlanRalphIter))
-	state.inputs[fieldCompactThreshold] = newSettingsInput("Compact Threshold (k)", strconv.Itoa(settings.CompactThresholdK))
-	state.focusField(state.focus)
-
-	return state
+	return newSettingsFormStateForScope(resolvedSettingsForModal(settings, config.ScopeProject), config.ScopeProject)
 }
 
 func newSettingsSetupState(settings domain.Settings) settingsSetupState {
@@ -233,15 +282,7 @@ func (s settingsFormState) isTextField(field settingsField) bool {
 }
 
 func (s settingsFormState) visibleFields() []settingsField {
-	fields := make([]settingsField, 0, len(settingsFieldOrder))
-	for _, field := range settingsFieldOrder {
-		spec := s.spec(field)
-		if spec.visible != nil && !spec.visible(s.provider) {
-			continue
-		}
-		fields = append(fields, field)
-	}
-	return fields
+	return append([]settingsField(nil), settingsFieldOrder...)
 }
 
 func (s *settingsFormState) resizeInputs(width int) {
@@ -336,11 +377,24 @@ func (s settingsFormState) pendingProvider() domain.Provider {
 
 func (s *settingsFormState) setProvider(provider domain.Provider) {
 	s.provider = provider
+	s.providerSet = true
 	s.ensureVisibleFocus()
 }
 
 func (s settingsFormState) providerModelField(provider domain.Provider) settingsField {
 	switch provider {
+	case domain.ProviderGemini:
+		return fieldGeminiModel
+	case domain.ProviderVertex:
+		return fieldVertexModel
+	case domain.ProviderBedrock:
+		return fieldBedrockModel
+	case domain.ProviderClaude:
+		return fieldClaudeModel
+	case domain.ProviderAzure:
+		return fieldAzureModel
+	case domain.ProviderChatGPT:
+		return fieldChatGPTModel
 	case domain.ProviderVLLM:
 		return fieldVLLMModel
 	default:
@@ -348,36 +402,92 @@ func (s settingsFormState) providerModelField(provider domain.Provider) settings
 	}
 }
 
-func (s settingsFormState) providerHasModel(provider domain.Provider) bool {
-	field := s.providerModelField(provider)
-	return strings.TrimSpace(s.inputs[field].Value()) != ""
+func (s settingsFormState) providerPrimaryField(provider domain.Provider) settingsField {
+	switch provider {
+	case domain.ProviderVLLM:
+		return fieldVLLMBaseURL
+	case domain.ProviderGemini:
+		return fieldGeminiModel
+	case domain.ProviderVertex:
+		return fieldVertexModel
+	case domain.ProviderBedrock:
+		return fieldBedrockBaseURL
+	case domain.ProviderClaude:
+		return fieldClaudeModel
+	case domain.ProviderAzure:
+		return fieldAzureBaseURL
+	case domain.ProviderChatGPT:
+		return fieldChatGPTModel
+	default:
+		return fieldOllamaBaseURL
+	}
+}
+
+func (s settingsFormState) missingProviderFields(base domain.Settings, provider domain.Provider) []string {
+	_ = base
+	return s.previewResolved().Effective.MissingProviderFields(provider)
+}
+
+func describeMissingProviderFields(provider domain.Provider, missing []string) string {
+	labels := make([]string, 0, len(missing))
+	for _, field := range missing {
+		switch field {
+		case "Base URL":
+			labels = append(labels, provider.DisplayName()+" Base URL")
+		case "Model":
+			labels = append(labels, provider.DisplayName()+" Model")
+		case "API Key Env":
+			labels = append(labels, provider.DisplayName()+" API Key Env")
+		default:
+			labels = append(labels, field)
+		}
+	}
+	return strings.Join(labels, ", ")
+}
+
+func describeMissingProviderConfiguration(provider domain.Provider, missing []string) string {
+	if len(missing) == 1 {
+		switch missing[0] {
+		case "Base URL":
+			return "the " + provider.DisplayName() + " Base URL"
+		case "Model":
+			return "the " + provider.DisplayName() + " Model"
+		case "API Key Env":
+			return "the " + provider.DisplayName() + " API Key Env"
+		}
+	}
+	return describeMissingProviderFields(provider, missing)
 }
 
 func (s settingsFormState) buildSettings(base domain.Settings) domain.Settings {
-	settings := base
-	settings.DefaultProvider = s.provider
-	settings.ApprovalPolicy = domain.ApprovalConfirmMutations
-	settings.Providers.Ollama.BaseURL = strings.TrimSpace(s.inputs[fieldOllamaBaseURL].Value())
-	settings.Providers.Ollama.Model = strings.TrimSpace(s.inputs[fieldOllamaModel].Value())
-	settings.Providers.VLLM.BaseURL = strings.TrimSpace(s.inputs[fieldVLLMBaseURL].Value())
-	settings.Providers.VLLM.Model = strings.TrimSpace(s.inputs[fieldVLLMModel].Value())
-	settings.Providers.VLLM.APIKeyEnv = strings.TrimSpace(s.inputs[fieldVLLMAPIKeyEnv].Value())
-	settings.SelfDrivingMode = s.selfDriving
-	settings.ReactRalphIter = parsePositiveInt(s.inputs[fieldReactRalphIter].Value(), settings.ReactRalphIter)
-	settings.PlanRalphIter = parsePositiveInt(s.inputs[fieldPlanRalphIter].Value(), settings.PlanRalphIter)
-	settings.CompactThresholdK = parsePositiveInt(s.inputs[fieldCompactThreshold].Value(), settings.CompactThresholdK)
-	settings.Normalize()
-	return settings
+	_ = base
+	return s.previewResolved().Effective
 }
 
-func settingsFieldsForGroup(provider domain.Provider, group settingsFieldGroup) []settingsField {
+func nextProvider(current domain.Provider, step int) domain.Provider {
+	providers := domain.Providers()
+	if len(providers) == 0 {
+		return current
+	}
+	index := 0
+	for providerIndex, provider := range providers {
+		if provider == current {
+			index = providerIndex
+			break
+		}
+	}
+	index = (index + step) % len(providers)
+	if index < 0 {
+		index += len(providers)
+	}
+	return providers[index]
+}
+
+func settingsFieldsForGroup(group settingsFieldGroup) []settingsField {
 	fields := make([]settingsField, 0, len(settingsFieldOrder))
 	for _, field := range settingsFieldOrder {
 		spec := settingsFieldSpecs[field]
 		if spec.group != group {
-			continue
-		}
-		if spec.visible != nil && !spec.visible(provider) {
 			continue
 		}
 		fields = append(fields, field)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/config"
 	"github.com/keonho-kim/orch/internal/session"
 )
 
@@ -657,9 +658,7 @@ func resolveOrchExecutable() (string, error) {
 func resolveSubagentRepoRoot(workspaceRoot string) (string, error) {
 	current := filepath.Clean(workspaceRoot)
 	for {
-		settingsPath := filepath.Join(current, "orch.settings.json")
-		bootstrapPath := filepath.Join(current, "runtime-asset", "bootstrap", "AGENTS.md")
-		if fileExists(settingsPath) && fileExists(bootstrapPath) {
+		if config.LooksLikeRepoRoot(current) {
 			return current, nil
 		}
 
