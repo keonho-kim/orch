@@ -21,4 +21,5 @@ if [[ "$from_stdin" != "true" ]]; then
   exit 1
 fi
 
-patch -p0 -u
+patch_bin="${OT_PATCH_BIN:-patch}"
+"$patch_bin" -p0 -u

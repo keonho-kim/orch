@@ -32,6 +32,7 @@ type Paths struct {
 	DBPath              string
 	TestWorkspace       string
 	LocalStateDir       string
+	APIDir              string
 	SessionsDir         string
 }
 
@@ -55,12 +56,13 @@ func ResolvePaths(repoRoot string) (Paths, error) {
 		DBPath:              filepath.Join(userConfigDir, dbFileName),
 		TestWorkspace:       filepath.Join(repoRoot, testWorkspaceName),
 		LocalStateDir:       filepath.Join(repoRoot, localStateDirName),
+		APIDir:              filepath.Join(repoRoot, localStateDirName, "api"),
 		SessionsDir:         filepath.Join(repoRoot, localStateDirName, sessionsDirName),
 	}, nil
 }
 
 func EnsureRuntimePaths(paths Paths) error {
-	for _, path := range []string{paths.RuntimeAssetDir, paths.UserConfigDir, paths.TestWorkspace, paths.LocalStateDir, paths.SessionsDir} {
+	for _, path := range []string{paths.RuntimeAssetDir, paths.UserConfigDir, paths.TestWorkspace, paths.LocalStateDir, paths.APIDir, paths.SessionsDir} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			return fmt.Errorf("create directory %s: %w", path, err)
 		}

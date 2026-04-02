@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -26,7 +27,11 @@ const (
 	subagentPlaceholder   = "-"
 )
 
-type OTRunner struct{}
+type scriptEnvPreparer func([]string) ([]string, error)
+
+type OTRunner struct {
+	prepareScriptEnv scriptEnvPreparer
+}
 
 type otInspection struct {
 	Subcommand      string
@@ -48,6 +53,10 @@ var supportedOTSubcommands = map[string]struct{}{
 
 func NewOTRunner() *OTRunner {
 	return &OTRunner{}
+}
+
+func NewOTRunnerWithScriptEnvPreparer(preparer scriptEnvPreparer) *OTRunner {
+	return &OTRunner{prepareScriptEnv: preparer}
 }
 
 func (r *OTRunner) Run(ctx context.Context, workspaceRoot string, record domain.RunRecord, env []string, request domain.ExecRequest) (string, error) {
@@ -75,7 +84,21 @@ func (r *OTRunner) Run(ctx context.Context, workspaceRoot string, record domain.
 		Stdin:      request.Stdin,
 	}
 
-	return runExternal(ctx, workspaceRoot, record, env, scriptRequest)
+	scriptEnv := append([]string(nil), env...)
+	if requiresEmbeddedOTHelpers(inspection.Subcommand) {
+		if r.prepareScriptEnv == nil {
+			if runtime.GOOS == "linux" {
+				return "", fmt.Errorf("ot %s requires embedded helper preparation on linux", inspection.Subcommand)
+			}
+		} else {
+			scriptEnv, err = r.prepareScriptEnv(scriptEnv)
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+
+	return runExternal(ctx, workspaceRoot, record, scriptEnv, scriptRequest)
 }
 
 func inspectOTRequest(workspaceRoot string, record domain.RunRecord, request domain.ExecRequest) (otInspection, error) {
@@ -752,9 +775,13 @@ func resolveSubagentRepoRoot(workspaceRoot string) (string, error) {
 	return "", fmt.Errorf("resolve repo root from workspace %s", workspaceRoot)
 }
 
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
+func requiresEmbeddedOTHelpers(subcommand string) bool {
+	switch strings.TrimSpace(subcommand) {
+	case "patch", "search":
+		return true
+	default:
+		return false
+	}
 }
 
 func requestCwdOrWorkspace(record domain.RunRecord) string {

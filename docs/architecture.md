@@ -3,6 +3,7 @@
 ## Ownership
 
 - `internal/cli`: entrypoints and hidden child-run commands
+- `internal/apiserver`: attached local HTTP API, auth, SSE, and discovery-file lifecycle
 - `internal/orchestrator`: gateway/worker coordination and ReAct loop
 - `internal/session`: transcript, metadata, compact, lineage
 - `internal/tooling`: OT execution and approval policy

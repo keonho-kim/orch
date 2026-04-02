@@ -7,6 +7,14 @@ import (
 
 	"github.com/keonho-kim/orch/domain"
 	"github.com/keonho-kim/orch/internal/tooling"
+	helperbin "github.com/keonho-kim/orch/runtime-asset/helper-bin"
+)
+
+var (
+	version = "dev"
+	commit  = ""
+	date    = ""
+	builtBy = ""
 )
 
 func main() {
@@ -17,6 +25,8 @@ func main() {
 }
 
 func run(args []string) error {
+	_, _, _ = commit, date, builtBy
+
 	if len(args) == 0 {
 		return fmt.Errorf("usage: ot <subcommand> [args...]")
 	}
@@ -26,7 +36,9 @@ func run(args []string) error {
 		return fmt.Errorf("resolve working directory: %w", err)
 	}
 
-	output, err := tooling.NewOTRunner().Run(
+	output, err := tooling.NewOTRunnerWithScriptEnvPreparer(func(env []string) ([]string, error) {
+		return helperbin.PrepareOTEnv(env, version)
+	}).Run(
 		context.Background(),
 		workspaceRoot,
 		domain.RunRecord{WorkspacePath: workspaceRoot, CurrentCwd: workspaceRoot},

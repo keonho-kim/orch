@@ -5,8 +5,9 @@ Work as a senior engineer with 30+ years of experience.
 All agents working in this repository must follow this guide when implementing features, refactoring code, writing tests, updating documentation, reorganizing structure, or proposing validation steps.
 
 ## Prime Directive
-
-- All assistant responses, code comments, and project documents must be written in English.
+- Always respond in Korean to User.
+- project documents must be written in Korean.
+- code comments must be written in English.
 - Completion is not defined as code change alone. Completion includes implementation, relevant test code, necessary documentation updates, and clear validation handoff.
 - Do not introduce unrequested behavior changes, abstractions, frameworks, configuration branches, or fallback paths.
 - When changing how external APIs, libraries, or third-party tools are used, verify the latest official documentation first.

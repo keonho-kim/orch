@@ -14,9 +14,8 @@ func TestResolveApprovalUpdatesRunState(t *testing.T) {
 	t.Parallel()
 
 	service := &Service{
-		ctx:     context.Background(),
-		runs:    map[string]*runState{},
-		updates: make(chan UIEvent, 8),
+		ctx:  context.Background(),
+		runs: map[string]*runState{},
 	}
 	service.runs["R1"] = &runState{
 		record: domain.RunRecord{
@@ -85,7 +84,6 @@ func TestOpenNewSessionResetsCurrentSessionAndRuns(t *testing.T) {
 				record: domain.RunRecord{RunID: "R1", Status: domain.StatusCompleted},
 			},
 		},
-		updates: make(chan UIEvent, 8),
 		settings: domain.Settings{
 			DefaultProvider: domain.ProviderOllama,
 			Providers: domain.ProviderCatalog{

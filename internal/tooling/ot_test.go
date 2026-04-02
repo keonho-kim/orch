@@ -3,55 +3,11 @@ package tooling
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/keonho-kim/orch/domain"
 )
-
-func copyRepoOTScripts(t *testing.T, workspace string) {
-	t.Helper()
-
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve caller path")
-	}
-
-	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(file)))
-	sourceRoot := filepath.Join(repoRoot, "tools", "ot")
-	targetRoot := filepath.Join(workspace, "tools", "ot")
-
-	if err := os.MkdirAll(targetRoot, 0o755); err != nil {
-		t.Fatalf("mkdir tools root: %v", err)
-	}
-
-	entries, err := os.ReadDir(sourceRoot)
-	if err != nil {
-		t.Fatalf("read source tools: %v", err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
-		sourcePath := filepath.Join(sourceRoot, entry.Name())
-		data, err := os.ReadFile(sourcePath)
-		if err != nil {
-			t.Fatalf("read source script %s: %v", entry.Name(), err)
-		}
-
-		info, err := os.Stat(sourcePath)
-		if err != nil {
-			t.Fatalf("stat source script %s: %v", entry.Name(), err)
-		}
-
-		targetPath := filepath.Join(targetRoot, entry.Name())
-		if err := os.WriteFile(targetPath, data, info.Mode()); err != nil {
-			t.Fatalf("write target script %s: %v", entry.Name(), err)
-		}
-	}
-}
 
 func TestInspectOTReadInsideWorkspaceNormalizesRelativeDisplay(t *testing.T) {
 	t.Parallel()

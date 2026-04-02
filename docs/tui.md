@@ -6,6 +6,8 @@ The TUI is the primary operator interface for `orch`. It uses the same orchestra
 
 It is session-oriented, not shell-oriented.
 
+Interactive TUI launches also start an attached local HTTP API server in the same process. Connection details are written to `.orch/api/current.json`.
+
 ## Layout Model
 
 | Area | Responsibility |

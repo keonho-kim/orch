@@ -245,7 +245,7 @@ func (s *Service) runSessionMaintenance(sessionID string) {
 		if updated, updateErr := s.sessions.UpdateTitle(meta, title); updateErr == nil {
 			meta = updated
 			s.setCurrentSessionIfActive(updated)
-			s.publish(UIEvent{Message: "Session title updated."})
+			s.publish(UIEvent{Type: "snapshot", SessionID: updated.SessionID, Message: "Session title updated."})
 		}
 	}
 
@@ -255,7 +255,7 @@ func (s *Service) runSessionMaintenance(sessionID string) {
 	if s.sessions.ShouldCompact(settings, meta) {
 		if updated, compactErr := s.sessions.Compact(context.Background(), meta); compactErr == nil {
 			s.setCurrentSessionIfActive(updated)
-			s.publish(UIEvent{Message: "Session compacted."})
+			s.publish(UIEvent{Type: "snapshot", SessionID: updated.SessionID, Message: "Session compacted."})
 		}
 	}
 }

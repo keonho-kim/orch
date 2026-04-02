@@ -37,6 +37,8 @@ type Model struct {
 	infoLines           []string
 	slashMenuIndex      int
 	settings            settingsModalState
+	eventCh             <-chan orchestrator.ServiceEvent
+	eventCancel         func()
 }
 
 type serviceUpdateMsg struct {
@@ -78,6 +80,7 @@ func New(service *orchestrator.Service) Model {
 		followOutput:        true,
 		settings:            newSettingsModalFromResolved(service.ConfigState()),
 	}
+	model.eventCh, model.eventCancel = service.SubscribeEvents()
 	if model.needsSettingsConfiguration() {
 		model.settings = newSetupSettingsModalFromResolved(service.ConfigState())
 		model.statusMessage = "Configure a provider and model to start the first run."
@@ -85,6 +88,10 @@ func New(service *orchestrator.Service) Model {
 	model.syncChatViewport(true)
 
 	return model
+}
+
+func (m *Model) SetStatusMessage(message string) {
+	m.statusMessage = strings.TrimSpace(message)
 }
 
 func (m *Model) OpenHistoryPicker() {
@@ -103,7 +110,7 @@ func (m *Model) OpenHistoryPicker() {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, waitForServiceUpdate(m.service))
+	return tea.Batch(textinput.Blink, waitForServiceUpdate(m.eventCh))
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -122,7 +129,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMessage = message.event.Message
 		}
 		m.syncChatViewport(stickToBottom)
-		return m, waitForServiceUpdate(m.service)
+		return m, waitForServiceUpdate(m.eventCh)
 	case operationErrMsg:
 		if message.err != nil {
 			m.statusMessage = message.err.Error()
@@ -454,9 +461,12 @@ func (m *Model) applyHistory(delta int) {
 	m.input.SetValue(messageHistory[m.messageHistoryIndex])
 }
 
-func waitForServiceUpdate(service *orchestrator.Service) tea.Cmd {
+func waitForServiceUpdate(events <-chan orchestrator.ServiceEvent) tea.Cmd {
 	return func() tea.Msg {
-		event := <-service.Events()
+		event, ok := <-events
+		if !ok {
+			return operationErrMsg{err: fmt.Errorf("service event stream closed")}
+		}
 		return serviceUpdateMsg{event: event}
 	}
 }

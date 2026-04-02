@@ -81,11 +81,12 @@ run_content_search() {
   shift
 
   local -a cmd
+  local rg_bin="${OT_RG_BIN:-rg}"
   local output=""
   local status=0
   local line=""
 
-  cmd=(rg --line-number --color never --no-heading)
+  cmd=("$rg_bin" --line-number --color never --no-heading)
   if [[ "$scope" == "inside" ]]; then
     cmd+=(--hidden)
   fi

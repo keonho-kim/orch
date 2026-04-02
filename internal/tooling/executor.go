@@ -374,7 +374,7 @@ func (e *Executor) executeRead(ctx context.Context, workspaceRoot string, record
 	if request.EndLine > 0 {
 		args = append(args, "--end", fmt.Sprintf("%d", request.EndLine))
 	}
-	output, err := e.ot.Run(ctx, workspaceRoot, record, env, domain.ExecRequest{Command: "ot", Args: args})
+	output, err := runOTBinary(ctx, workspaceRoot, record, env, domain.ExecRequest{Args: args})
 	if err != nil {
 		return Execution{}, err
 	}
@@ -387,7 +387,7 @@ func (e *Executor) executeList(ctx context.Context, workspaceRoot string, record
 		return Execution{}, err
 	}
 	args := []string{"list", "--path", normalizedPath}
-	output, err := e.ot.Run(ctx, workspaceRoot, record, env, domain.ExecRequest{Command: "ot", Args: args})
+	output, err := runOTBinary(ctx, workspaceRoot, record, env, domain.ExecRequest{Args: args})
 	if err != nil {
 		return Execution{}, err
 	}
@@ -406,7 +406,7 @@ func (e *Executor) executeSearch(ctx context.Context, workspaceRoot string, reco
 	if strings.TrimSpace(request.ContentPattern) != "" {
 		args = append(args, "--content", strings.TrimSpace(request.ContentPattern))
 	}
-	output, err := e.ot.Run(ctx, workspaceRoot, record, env, domain.ExecRequest{Command: "ot", Args: args})
+	output, err := runOTBinary(ctx, workspaceRoot, record, env, domain.ExecRequest{Args: args})
 	if err != nil {
 		return Execution{}, err
 	}
@@ -414,10 +414,9 @@ func (e *Executor) executeSearch(ctx context.Context, workspaceRoot string, reco
 }
 
 func (e *Executor) executeWrite(ctx context.Context, workspaceRoot string, record domain.RunRecord, env []string, request domain.OTRequest) (Execution, error) {
-	output, err := e.ot.Run(ctx, workspaceRoot, record, env, domain.ExecRequest{
-		Command: "ot",
-		Args:    []string{"write", "--path", normalizeWorkspacePath(request.Path), "--from-stdin"},
-		Stdin:   request.Content,
+	output, err := runOTBinary(ctx, workspaceRoot, record, env, domain.ExecRequest{
+		Args:  []string{"write", "--path", normalizeWorkspacePath(request.Path), "--from-stdin"},
+		Stdin: request.Content,
 	})
 	if err != nil {
 		return Execution{}, err
@@ -426,10 +425,9 @@ func (e *Executor) executeWrite(ctx context.Context, workspaceRoot string, recor
 }
 
 func (e *Executor) executePatch(ctx context.Context, workspaceRoot string, record domain.RunRecord, env []string, request domain.OTRequest) (Execution, error) {
-	output, err := e.ot.Run(ctx, workspaceRoot, record, env, domain.ExecRequest{
-		Command: "ot",
-		Args:    []string{"patch", "--from-stdin"},
-		Stdin:   request.Patch,
+	output, err := runOTBinary(ctx, workspaceRoot, record, env, domain.ExecRequest{
+		Args:  []string{"patch", "--from-stdin"},
+		Stdin: request.Patch,
 	})
 	if err != nil {
 		return Execution{}, err
@@ -615,4 +613,115 @@ func truncateOutput(value string) string {
 		return value
 	}
 	return value[len(value)-maxCommandOutputBytes:]
+}
+
+func runOTBinary(ctx context.Context, workspaceRoot string, record domain.RunRecord, env []string, request domain.ExecRequest) (string, error) {
+	executable, err := resolveOTExecutable(env)
+	if err != nil {
+		return "", err
+	}
+
+	cwd, err := resolveExecutionCwd(workspaceRoot, record, request)
+	if err != nil {
+		return "", err
+	}
+
+	runCtx := ctx
+	cancel := func() {}
+	if request.TimeoutSec > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, time.Duration(request.TimeoutSec)*time.Second)
+	}
+	defer cancel()
+
+	command := exec.CommandContext(runCtx, executable, request.Args...)
+	command.Dir = cwd
+	command.Env = baseEnv(workspaceRoot, env)
+	if request.Stdin != "" {
+		command.Stdin = strings.NewReader(request.Stdin)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+
+	if err := command.Run(); err != nil {
+		combined := truncateOutput(stdout.String() + stderr.String())
+		if combined == "" {
+			return "", fmt.Errorf("run ot: %w", err)
+		}
+		return "", fmt.Errorf("run ot: %w: %s", err, combined)
+	}
+
+	return truncateOutput(stdout.String() + stderr.String()), nil
+}
+
+func resolveOTExecutable(env []string) (string, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolve executable: %w", err)
+	}
+
+	return resolveOTExecutableFrom(executable, func(name string) (string, error) {
+		return lookPathInEnv(name, env)
+	})
+}
+
+func resolveOTExecutableFrom(executable string, lookPath func(string) (string, error)) (string, error) {
+	if filepath.Base(executable) == "ot" {
+		return executable, nil
+	}
+
+	sibling := filepath.Join(filepath.Dir(executable), "ot")
+	if _, err := os.Stat(sibling); err == nil {
+		return sibling, nil
+	}
+
+	if lookedUp, err := lookPath("ot"); err == nil {
+		return lookedUp, nil
+	}
+	return "", fmt.Errorf("resolve ot executable from %s", executable)
+}
+
+func lookPathInEnv(name string, env []string) (string, error) {
+	if strings.Contains(name, string(filepath.Separator)) {
+		if isExecutableFile(name) {
+			return name, nil
+		}
+		return "", fmt.Errorf("%s is not executable", name)
+	}
+
+	pathValue := envValueByKey(env, "PATH")
+	if strings.TrimSpace(pathValue) == "" {
+		pathValue = os.Getenv("PATH")
+	}
+
+	for _, dir := range filepath.SplitList(pathValue) {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+		candidate := filepath.Join(dir, name)
+		if isExecutableFile(candidate) {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("look up %s in PATH", name)
+}
+
+func envValueByKey(env []string, key string) string {
+	for _, entry := range env {
+		currentKey, value, ok := strings.Cut(entry, "=")
+		if ok && currentKey == key {
+			return value
+		}
+	}
+	return ""
+}
+
+func isExecutableFile(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	return info.Mode().Perm()&0o111 != 0
 }

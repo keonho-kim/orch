@@ -8,12 +8,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/apiserver"
 	"github.com/keonho-kim/orch/internal/config"
 	"github.com/keonho-kim/orch/internal/orchestrator"
 	sqlitestore "github.com/keonho-kim/orch/internal/store/sqlite"
@@ -189,6 +191,13 @@ func runTUI(repoRoot string, restoreSessionID string, showHistory bool, restoreL
 	}
 
 	model := tui.New(app.service)
+	apiStatus, apiEvent := startAttachedAPIServer(app, os.Stderr)
+	if strings.TrimSpace(apiStatus) != "" {
+		model.SetStatusMessage(apiStatus)
+	}
+	if apiEvent.Type != "" {
+		app.service.EmitEvent(apiEvent)
+	}
 	if showHistory {
 		model.OpenHistoryPicker()
 	}
@@ -237,6 +246,7 @@ type app struct {
 	store        *sqlitestore.Store
 	service      *orchestrator.Service
 	paths        config.Paths
+	api          *apiserver.Server
 	skipFinalize bool
 }
 
@@ -272,6 +282,9 @@ func newApp(repoRoot string, options orchestrator.BootOptions) (*app, error) {
 }
 
 func (a *app) close() {
+	if a.api != nil {
+		_ = a.api.Close()
+	}
 	a.cancel()
 	if a.service != nil && !a.skipFinalize {
 		_ = spawnFinalizeProcess(a.service.Snapshot().CurrentSession.SessionID, a.paths.RepoRoot)
@@ -340,6 +353,32 @@ func runSubagent(repoRoot string, parentSessionID string, parentRunID string, en
 		return fmt.Errorf("write subagent result: %w", err)
 	}
 	return nil
+}
+
+func startAttachedAPIServer(app *app, stderr io.Writer) (string, orchestrator.ServiceEvent) {
+	server, err := apiserver.Start(app.ctx, app.service, app.paths)
+	if err != nil {
+		message := "Attached API server failed to start."
+		_, _ = fmt.Fprintf(stderr, "orch api: %v\n", err)
+		return message + " See stderr for details.", orchestrator.ServiceEvent{}
+	}
+	app.api = server
+
+	discovery := server.Discovery()
+	currentPath := filepath.Join(app.paths.APIDir, "current.json")
+	_, _ = fmt.Fprintf(stderr, "orch api: ready at %s (details: %s)\n", discovery.BaseURL, currentPath)
+
+	message := fmt.Sprintf("Local API ready at %s. See %s for connection details.", discovery.BaseURL, currentPath)
+	return message, orchestrator.ServiceEvent{
+		Type:      "api_server_ready",
+		SessionID: discovery.SessionID,
+		Message:   "API server ready.",
+		Payload: map[string]any{
+			"base_url":   discovery.BaseURL,
+			"session_id": discovery.SessionID,
+			"repo_root":  discovery.RepoRoot,
+		},
+	}
 }
 
 func waitForRun(ctx context.Context, service *orchestrator.Service, runID string) (domain.RunRecord, error) {

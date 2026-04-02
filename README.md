@@ -19,6 +19,7 @@ The runtime now centers on:
 | Providers | `ollama`, `vllm`, `gemini`, `vertex`, `bedrock`, `claude`, `azure`, `chatgpt` |
 | Workspace | provisioned `test-workspace/` |
 | Session storage | `.orch/sessions/*.jsonl` + `.meta.json` |
+| Attached API | localhost-only HTTP + SSE during interactive TUI sessions |
 | Model-facing tool | `ot` only |
 | Continuity | compact summary + post-compact records |
 
@@ -109,6 +110,26 @@ Provider notes:
 - `.orch/chatHistory.md` is shared conversation memory with session-tagged entries and bounded prompt loading
 - delegated child worker sessions are exposed as first-class tasks derived from session metadata
 - each run persists a context snapshot so the active prompt inputs can be inspected later
+- interactive `orch` sessions now expose a local attached HTTP API server with repo-local discovery files under `.orch/api/`
+
+## Local API
+
+Interactive TUI launches now start an attached local HTTP API server in the same `orch` process.
+
+- bind: `127.0.0.1:<ephemeral-port>`
+- auth: `Authorization: Bearer <token>`
+- discovery files:
+  - `.orch/api/<session-id>.json`
+  - `.orch/api/current.json`
+- lifecycle: the attached API server exits when the interactive `orch` session exits
+
+Core endpoint mapping:
+
+- `orch exec` -> `POST /v1/exec`, `GET /v1/exec/{run_id}`, `GET /v1/exec/{run_id}/events`, `POST /v1/exec/{run_id}/approval`
+- `orch history` -> `GET /v1/history`, `GET /v1/history/latest`, `POST /v1/history/restore`
+- `orch config` -> `GET /v1/config`, `PATCH /v1/config`
+- session/process status -> `GET /v1/status`
+- global event stream -> `GET /v1/events`
 
 ## OT Contract
 

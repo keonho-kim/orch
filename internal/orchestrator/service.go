@@ -32,18 +32,21 @@ type Service struct {
 	clients   map[domain.Provider]adapters.Client
 	sessions  *session.Service
 
-	mu             sync.RWMutex
-	settings       domain.Settings
-	configState    config.ResolvedSettings
-	history        []string
-	runs           map[string]*runState
-	currentRun     string
-	lastPrompt     string
-	activePlan     domain.PlanCache
-	currentSession domain.SessionMetadata
-	inheritedCtx   session.Context
-	references     *referenceResolver
-	updates        chan UIEvent
+	eventMu sync.RWMutex
+
+	mu               sync.RWMutex
+	settings         domain.Settings
+	configState      config.ResolvedSettings
+	history          []string
+	runs             map[string]*runState
+	currentRun       string
+	lastPrompt       string
+	activePlan       domain.PlanCache
+	currentSession   domain.SessionMetadata
+	inheritedCtx     session.Context
+	references       *referenceResolver
+	subscribers      map[int]chan ServiceEvent
+	nextSubscriberID int
 }
 
 type runState struct {
@@ -69,11 +72,6 @@ type selectedSkill struct {
 	Path    string
 }
 
-type UIEvent struct {
-	RunID   string
-	Message string
-}
-
 type Snapshot struct {
 	Settings        domain.Settings
 	MessageHistory  []string
@@ -85,6 +83,22 @@ type Snapshot struct {
 	LastPrompt      string
 	ActivePlan      domain.PlanCache
 	CurrentSession  domain.SessionMetadata
+}
+
+type Status struct {
+	CurrentSession  domain.SessionMetadata  `json:"current_session"`
+	CurrentRunID    string                  `json:"current_run_id,omitempty"`
+	Provider        string                  `json:"provider,omitempty"`
+	Model           string                  `json:"model,omitempty"`
+	PendingApproval *domain.ApprovalRequest `json:"pending_approval,omitempty"`
+	ActiveRunCount  int                     `json:"active_run_count"`
+}
+
+type RunSnapshot struct {
+	Record          domain.RunRecord        `json:"record"`
+	Output          string                  `json:"output,omitempty"`
+	Thinking        string                  `json:"thinking,omitempty"`
+	PendingApproval *domain.ApprovalRequest `json:"pending_approval,omitempty"`
 }
 
 type BootOptions struct {
@@ -122,8 +136,8 @@ func NewService(
 			domain.ProviderAzure:   adapters.NewAzureClient(),
 			domain.ProviderChatGPT: adapters.NewChatGPTClient(),
 		},
-		runs:    make(map[string]*runState),
-		updates: make(chan UIEvent, 256),
+		runs:        make(map[string]*runState),
+		subscribers: make(map[int]chan ServiceEvent),
 	}
 	service.references = newReferenceResolver()
 	service.sessions = session.NewService(session.NewManager(paths.SessionsDir), maintenanceRunner{
@@ -252,10 +266,6 @@ func (s *Service) loadInheritedContext(options BootOptions) (session.Context, er
 	return s.sessions.Context(meta)
 }
 
-func (s *Service) Events() <-chan UIEvent {
-	return s.updates
-}
-
 func (s *Service) Snapshot() Snapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -292,6 +302,44 @@ func (s *Service) Snapshot() Snapshot {
 	}
 
 	return snapshot
+}
+
+func (s *Service) Status() Status {
+	snapshot := s.Snapshot()
+	status := Status{
+		CurrentSession: snapshot.CurrentSession,
+		CurrentRunID:   snapshot.CurrentRunID,
+		Provider:       snapshot.Settings.DefaultProvider.String(),
+		ActiveRunCount: s.ActiveRunCount(),
+	}
+	if snapshot.Settings.DefaultProvider != "" {
+		status.Model = snapshot.Settings.ConfigFor(snapshot.Settings.DefaultProvider).Model
+	}
+	if snapshot.PendingApproval != nil {
+		request := *snapshot.PendingApproval
+		status.PendingApproval = &request
+	}
+	return status
+}
+
+func (s *Service) RunSnapshot(runID string) (RunSnapshot, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	state, ok := s.runs[runID]
+	if !ok {
+		return RunSnapshot{}, fmt.Errorf("run %s not found", runID)
+	}
+	snapshot := RunSnapshot{
+		Record:   state.record,
+		Output:   state.output,
+		Thinking: state.thinking,
+	}
+	if state.pending != nil {
+		request := state.pending.request
+		snapshot.PendingApproval = &request
+	}
+	return snapshot, nil
 }
 
 func (s *Service) ListSessions(limit int) ([]domain.SessionMetadata, error) {
@@ -356,7 +404,7 @@ func (s *Service) RestoreSession(sessionID string) error {
 		s.currentRun = runRecords[0].RunID
 		s.lastPrompt = runRecords[0].Prompt
 	}
-	s.publish(UIEvent{Message: fmt.Sprintf("Restored session %s.", sessionID)})
+	s.publish(UIEvent{Type: "session_restored", SessionID: sessionID, Message: fmt.Sprintf("Restored session %s.", sessionID)})
 	return nil
 }
 
@@ -402,7 +450,7 @@ func (s *Service) OpenNewSession() error {
 	s.runs = make(map[string]*runState)
 	s.mu.Unlock()
 
-	s.publish(UIEvent{Message: fmt.Sprintf("Opened new session %s.", newSession.SessionID)})
+	s.publish(UIEvent{Type: "session_opened", SessionID: newSession.SessionID, Message: fmt.Sprintf("Opened new session %s.", newSession.SessionID)})
 	if strings.TrimSpace(oldSessionID) != "" && oldSessionID != newSession.SessionID {
 		go s.finalizeSessionByID(oldSessionID)
 	}
@@ -484,7 +532,7 @@ func (s *Service) reloadResolvedSettings(message string) error {
 	s.configState = resolvedSettings
 	s.mu.Unlock()
 
-	s.publish(UIEvent{Message: message})
+	s.publish(UIEvent{Type: "config_updated", Message: message})
 	return nil
 }
 
@@ -620,7 +668,7 @@ func (s *Service) SubmitPromptMode(prompt string, mode domain.RunMode) (string, 
 	}
 	go s.runChatHistoryUserSummary(currentSession, runID, trimmed)
 
-	s.publish(UIEvent{RunID: runID, Message: "Run started."})
+	s.publish(UIEvent{Type: "run_created", RunID: runID, SessionID: currentSession.SessionID, Message: "Run started."})
 	go s.executeRun(runCtx, runID)
 
 	return runID, nil
@@ -684,9 +732,9 @@ func (s *Service) ResolveApproval(runID string, approved bool) error {
 	}
 
 	if approved {
-		s.publish(UIEvent{RunID: runID, Message: "Approved tool execution."})
+		s.publish(UIEvent{Type: "approval_resolved", RunID: runID, Message: "Approved tool execution."})
 	} else {
-		s.publish(UIEvent{RunID: runID, Message: fmt.Sprintf("Denied tool execution: %s.", request.Call.Name)})
+		s.publish(UIEvent{Type: "approval_resolved", RunID: runID, Message: fmt.Sprintf("Denied tool execution: %s.", request.Call.Name)})
 	}
 
 	return nil
@@ -729,20 +777,13 @@ func (s *Service) ShutdownAll() error {
 	}
 
 	if len(active) > 0 {
-		s.publish(UIEvent{Message: fmt.Sprintf("Cancelled %d active run(s).", len(active))})
+		s.publish(UIEvent{Type: "snapshot", Message: fmt.Sprintf("Cancelled %d active run(s).", len(active))})
 	}
 
 	if len(failures) > 0 {
 		return fmt.Errorf("shutdown errors: %s", strings.Join(failures, "; "))
 	}
 	return nil
-}
-
-func (s *Service) publish(event UIEvent) {
-	select {
-	case s.updates <- event:
-	default:
-	}
 }
 
 func (s *Service) saveActivePlan(cache domain.PlanCache) error {
@@ -754,7 +795,7 @@ func (s *Service) saveActivePlan(cache domain.PlanCache) error {
 	s.mu.Lock()
 	s.activePlan = cache
 	s.mu.Unlock()
-	s.publish(UIEvent{Message: "Plan cache updated."})
+	s.publish(UIEvent{Type: "snapshot", Message: "Plan cache updated."})
 	return nil
 }
 
@@ -818,7 +859,7 @@ func (s *Service) setRunIteration(runID string, iteration int) error {
 	if err := s.persistRun(record); err != nil {
 		return err
 	}
-	s.publish(UIEvent{RunID: runID})
+	s.publish(UIEvent{Type: "run_updated", RunID: runID})
 	return nil
 }
 
@@ -836,7 +877,7 @@ func (s *Service) setRunCwd(runID string, cwd string) error {
 	if err := s.persistRun(record); err != nil {
 		return err
 	}
-	s.publish(UIEvent{RunID: runID, Message: "Working directory updated."})
+	s.publish(UIEvent{Type: "run_updated", RunID: runID, Message: "Working directory updated."})
 	return nil
 }
 

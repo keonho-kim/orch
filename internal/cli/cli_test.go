@@ -1,10 +1,14 @@
 package cli
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/orchestrator"
 )
 
 func TestParseCommandDefaultsToTUI(t *testing.T) {
@@ -153,5 +157,72 @@ func TestParseCommandRejectsUnknownPositionalCommand(t *testing.T) {
 
 	if _, err := parseCommand([]string{"abcdef"}); err == nil {
 		t.Fatal("expected unknown positional command to be rejected")
+	}
+}
+
+func TestStartAttachedAPIServerStartsAndPublishesDiscovery(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("ORCH_MANAGED_SETTINGS", filepath.Join(home, "managed-settings.json"))
+
+	repoRoot := t.TempDir()
+	app, err := newApp(repoRoot, orchestrator.BootOptions{})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	defer app.close()
+	if app.api != nil {
+		t.Fatal("did not expect api server to start automatically in newApp")
+	}
+
+	var stderr bytes.Buffer
+	status, event := startAttachedAPIServer(app, &stderr)
+	if app.api == nil {
+		t.Fatal("expected attached api server to start")
+	}
+	if strings.TrimSpace(status) == "" || event.Type != "api_server_ready" {
+		t.Fatalf("unexpected api startup outputs: status=%q event=%+v", status, event)
+	}
+	if _, err := os.Stat(filepath.Join(app.paths.APIDir, "current.json")); err != nil {
+		t.Fatalf("expected current discovery file: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "orch api: ready at http://127.0.0.1:") {
+		t.Fatalf("unexpected stderr output: %q", stderr.String())
+	}
+}
+
+func TestStartAttachedAPIServerFailureIsNonFatal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("ORCH_MANAGED_SETTINGS", filepath.Join(home, "managed-settings.json"))
+
+	repoRoot := t.TempDir()
+	app, err := newApp(repoRoot, orchestrator.BootOptions{})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	defer app.close()
+
+	badPath := filepath.Join(t.TempDir(), "api")
+	if err := os.WriteFile(badPath, []byte("not-a-dir"), 0o644); err != nil {
+		t.Fatalf("write bad api path: %v", err)
+	}
+	app.paths.APIDir = badPath
+
+	var stderr bytes.Buffer
+	status, event := startAttachedAPIServer(app, &stderr)
+	if strings.TrimSpace(status) == "" {
+		t.Fatal("expected non-fatal status message")
+	}
+	if event.Type != "" {
+		t.Fatalf("did not expect ready event on failure: %+v", event)
+	}
+	if app.api != nil {
+		t.Fatal("did not expect api server on failure")
+	}
+	if !strings.Contains(stderr.String(), "orch api:") {
+		t.Fatalf("expected stderr output for api failure, got %q", stderr.String())
 	}
 }

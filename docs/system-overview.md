@@ -23,3 +23,4 @@ flowchart TD
 - dynamic evidence loading
 - compact-based continuity
 - child-session lineage for delegated work
+- attached local HTTP API server during interactive sessions

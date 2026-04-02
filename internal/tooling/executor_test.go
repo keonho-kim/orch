@@ -2,6 +2,7 @@ package tooling
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -193,7 +194,7 @@ func TestExecuteReadRejectsOutsideWorkspacePath(t *testing.T) {
 	}
 }
 
-func TestExecuteReadUsesOTRunner(t *testing.T) {
+func TestExecuteReadUsesExternalOTBinary(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
@@ -201,20 +202,37 @@ func TestExecuteReadUsesOTRunner(t *testing.T) {
 	if err := os.WriteFile(target, []byte("hello"), 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
-	toolsDir := filepath.Join(workspace, "tools", "ot")
-	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
-		t.Fatalf("mkdir tools: %v", err)
-	}
-	for scriptPath := range map[string]string{
-		filepath.Join(toolsDir, "read.sh"):   "",
-		filepath.Join(toolsDir, "list.sh"):   "",
-		filepath.Join(toolsDir, "search.sh"): "",
-		filepath.Join(toolsDir, "write.sh"):  "",
-		filepath.Join(toolsDir, "patch.sh"):  "",
-	} {
-		if err := os.WriteFile(scriptPath, []byte(strings.TrimSpace(fixtureScriptContent(scriptPath))), 0o755); err != nil {
-			t.Fatalf("write tool %s: %v", scriptPath, err)
-		}
+	otDir := t.TempDir()
+	otPath := filepath.Join(otDir, "ot")
+	script := strings.Join([]string{
+		"#!/usr/bin/env bash",
+		"set -euo pipefail",
+		"subcommand=\"$1\"",
+		"shift",
+		"case \"$subcommand\" in",
+		"  read)",
+		"    path=\"\"",
+		"    while [[ $# -gt 0 ]]; do",
+		"      case \"$1\" in",
+		"        --path)",
+		"          path=\"$2\"",
+		"          shift 2",
+		"          ;;",
+		"        *)",
+		"          shift",
+		"          ;;",
+		"      esac",
+		"    done",
+		"    cat \"$path\"",
+		"    ;;",
+		"  *)",
+		"    exit 1",
+		"    ;;",
+		"esac",
+		"",
+	}, "\n")
+	if err := os.WriteFile(otPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write ot stub: %v", err)
 	}
 
 	executor := NewExecutor()
@@ -225,7 +243,7 @@ func TestExecuteReadUsesOTRunner(t *testing.T) {
 		CurrentCwd:    workspace,
 	}
 
-	got, err := executor.Execute(context.Background(), workspace, record, []string{"PATH=" + os.Getenv("PATH")}, domain.ToolCall{
+	got, err := executor.Execute(context.Background(), workspace, record, []string{"PATH=" + otDir + string(os.PathListSeparator) + os.Getenv("PATH")}, domain.ToolCall{
 		Name:      "ot",
 		Arguments: `{"op":"read","path":"README.md"}`,
 	})
@@ -234,6 +252,44 @@ func TestExecuteReadUsesOTRunner(t *testing.T) {
 	}
 	if strings.TrimSpace(got.Output) != "hello" {
 		t.Fatalf("unexpected output: %q", got.Output)
+	}
+}
+
+func TestResolveOTExecutableFromPrefersSiblingBinary(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	current := filepath.Join(dir, "orch")
+	sibling := filepath.Join(dir, "ot")
+	if err := os.WriteFile(sibling, []byte(""), 0o755); err != nil {
+		t.Fatalf("write sibling: %v", err)
+	}
+
+	resolved, err := resolveOTExecutableFrom(current, func(string) (string, error) {
+		return "", fmt.Errorf("unexpected lookup")
+	})
+	if err != nil {
+		t.Fatalf("resolveOTExecutableFrom: %v", err)
+	}
+	if resolved != sibling {
+		t.Fatalf("unexpected resolved path: %q", resolved)
+	}
+}
+
+func TestResolveOTExecutableFromFallsBackToPath(t *testing.T) {
+	t.Parallel()
+
+	resolved, err := resolveOTExecutableFrom("/tmp/orch", func(name string) (string, error) {
+		if name != "ot" {
+			t.Fatalf("unexpected lookup for %q", name)
+		}
+		return "/usr/local/bin/ot", nil
+	})
+	if err != nil {
+		t.Fatalf("resolveOTExecutableFrom: %v", err)
+	}
+	if resolved != "/usr/local/bin/ot" {
+		t.Fatalf("unexpected resolved path: %q", resolved)
 	}
 }
 
@@ -288,16 +344,5 @@ func TestExecuteWorkerCompleteCarriesStructuredTaskOutcome(t *testing.T) {
 	}
 	if !strings.Contains(got.Output, "changed_paths: README.md") {
 		t.Fatalf("unexpected complete output: %q", got.Output)
-	}
-}
-
-func fixtureScriptContent(path string) string {
-	switch filepath.Base(path) {
-	case "read.sh":
-		return "#!/usr/bin/env bash\nset -euo pipefail\ntarget=\"\"\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    --target)\n      target=\"$2\"\n      shift 2\n      ;;\n    *)\n      shift\n      ;;\n  esac\ndone\ncat \"$target\"\n"
-	case "list.sh", "search.sh", "write.sh", "patch.sh":
-		return "#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n"
-	default:
-		return "#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n"
 	}
 }
