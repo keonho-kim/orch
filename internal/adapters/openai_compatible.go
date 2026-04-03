@@ -30,6 +30,8 @@ type openAICompatibleRequest struct {
 	Stream             bool                 `json:"stream"`
 	StreamIncludeUsage bool                 `json:"stream_include_usage,omitempty"`
 	StreamOptions      *openAIStreamOptions `json:"stream_options,omitempty"`
+	ChatTemplate       string               `json:"chat_template,omitempty"`
+	ChatTemplateKwargs map[string]any       `json:"chat_template_kwargs,omitempty"`
 }
 
 type streamUsage struct {
@@ -107,6 +109,7 @@ func (c openAICompatibleClient) Chat(ctx context.Context, settings domain.Provid
 }
 
 func buildOpenAICompatibleRequest(provider domain.Provider, request ChatRequest) (openAICompatibleRequest, error) {
+	profile := modelProfile(provider, request.Model)
 	payload := openAICompatibleRequest{
 		Messages: request.Messages,
 		Tools:    request.Tools,
@@ -119,12 +122,55 @@ func buildOpenAICompatibleRequest(provider domain.Provider, request ChatRequest)
 	case domain.ProviderVLLM:
 		payload.Model = request.Model
 		payload.StreamIncludeUsage = true
+		if profile.ChatTemplate != "" {
+			payload.ChatTemplate = profile.ChatTemplate
+		}
+		if len(profile.ChatTemplateKwargs) > 0 {
+			payload.ChatTemplateKwargs = profile.ChatTemplateKwargs
+		}
 	default:
 		payload.Model = request.Model
 		payload.StreamOptions = &openAIStreamOptions{IncludeUsage: true}
 	}
 
 	return payload, nil
+}
+
+type openAIModelProfile struct {
+	ChatTemplate       string
+	ChatTemplateKwargs map[string]any
+}
+
+func modelProfile(provider domain.Provider, model string) openAIModelProfile {
+	if provider != domain.ProviderVLLM {
+		return openAIModelProfile{}
+	}
+
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	switch {
+	case strings.Contains(normalized, "qwen") && (strings.Contains(normalized, "3.5") || strings.Contains(normalized, "35")):
+		return openAIModelProfile{
+			ChatTemplate:       strings.TrimSpace(os.Getenv("ORCH_VLLM_CHAT_TEMPLATE_QWEN35")),
+			ChatTemplateKwargs: map[string]any{"enable_thinking": true},
+		}
+	case strings.Contains(normalized, "deepseek"):
+		return openAIModelProfile{
+			ChatTemplate:       strings.TrimSpace(os.Getenv("ORCH_VLLM_CHAT_TEMPLATE_DEEPSEEK")),
+			ChatTemplateKwargs: map[string]any{"thinking": true},
+		}
+	case strings.Contains(normalized, "gemma-4"),
+		strings.Contains(normalized, "gemma4"):
+		return openAIModelProfile{
+			ChatTemplate: strings.TrimSpace(os.Getenv("ORCH_VLLM_CHAT_TEMPLATE_GEMMA4")),
+		}
+	case strings.HasPrefix(normalized, "glm-"),
+		strings.Contains(normalized, "glm-4"):
+		return openAIModelProfile{
+			ChatTemplate: strings.TrimSpace(os.Getenv("ORCH_VLLM_CHAT_TEMPLATE_GLM")),
+		}
+	default:
+		return openAIModelProfile{}
+	}
 }
 
 func openAICompatibleChatURL(provider domain.Provider, settings domain.ProviderSettings, model string) (string, error) {

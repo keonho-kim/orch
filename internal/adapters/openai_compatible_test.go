@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/keonho-kim/orch/domain"
@@ -171,5 +172,95 @@ func TestOpenAICompatibleClientsUseProviderSpecificAuthAndURL(t *testing.T) {
 				t.Fatalf("unexpected result: %+v", result)
 			}
 		})
+	}
+}
+
+func TestBuildOpenAICompatibleRequestAppliesVLLMModelProfiles(t *testing.T) {
+	tests := []struct {
+		name         string
+		model        string
+		templateEnv  string
+		templateBody string
+		wantKey      string
+		wantVal      any
+	}{
+		{
+			name:         "qwen-3.5 enables thinking",
+			model:        "Qwen3.5-Coder",
+			templateEnv:  "ORCH_VLLM_CHAT_TEMPLATE_QWEN35",
+			templateBody: "{{ qwen35_template }}",
+			wantKey:      "enable_thinking",
+			wantVal:      true,
+		},
+		{
+			name:         "deepseek enables thinking",
+			model:        "deepseek-r1",
+			templateEnv:  "ORCH_VLLM_CHAT_TEMPLATE_DEEPSEEK",
+			templateBody: "{{ deepseek_template }}",
+			wantKey:      "thinking",
+			wantVal:      true,
+		},
+		{
+			name:         "gemma4 has family template only",
+			model:        "gemma-4-27b-it",
+			templateEnv:  "ORCH_VLLM_CHAT_TEMPLATE_GEMMA4",
+			templateBody: "{{ gemma4_template }}",
+		},
+		{
+			name:         "glm has family template only",
+			model:        "glm-4.5",
+			templateEnv:  "ORCH_VLLM_CHAT_TEMPLATE_GLM",
+			templateBody: "{{ glm_template }}",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			if test.templateEnv != "" {
+				t.Setenv(test.templateEnv, test.templateBody)
+			}
+			request, err := buildOpenAICompatibleRequest(domain.ProviderVLLM, ChatRequest{
+				Model:    test.model,
+				Messages: []Message{{Role: "user", Content: "hello"}},
+			})
+			if err != nil {
+				t.Fatalf("build request: %v", err)
+			}
+			if strings.TrimSpace(test.templateBody) != "" && request.ChatTemplate != test.templateBody {
+				t.Fatalf("unexpected chat_template: %q", request.ChatTemplate)
+			}
+
+			if test.wantKey == "" {
+				if len(request.ChatTemplateKwargs) != 0 {
+					t.Fatalf("expected empty chat_template_kwargs, got %+v", request.ChatTemplateKwargs)
+				}
+				return
+			}
+			if len(request.ChatTemplateKwargs) == 0 {
+				t.Fatalf("expected chat_template_kwargs for model %s", test.model)
+			}
+			if got := request.ChatTemplateKwargs[test.wantKey]; got != test.wantVal {
+				t.Fatalf("unexpected chat_template_kwargs[%s]: %v", test.wantKey, got)
+			}
+		})
+	}
+}
+
+func TestBuildOpenAICompatibleRequestKeepsNonVLLMClearFromTemplateKwargs(t *testing.T) {
+	t.Parallel()
+
+	request, err := buildOpenAICompatibleRequest(domain.ProviderChatGPT, ChatRequest{
+		Model:    "gpt-5",
+		Messages: []Message{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if request.ChatTemplate != "" {
+		t.Fatalf("expected non-vLLM request to have no chat_template, got %q", request.ChatTemplate)
+	}
+	if len(request.ChatTemplateKwargs) != 0 {
+		t.Fatalf("expected non-vLLM request to have no chat_template_kwargs, got %+v", request.ChatTemplateKwargs)
 	}
 }

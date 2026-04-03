@@ -22,6 +22,7 @@ type ollamaChatRequest struct {
 	Messages []Message        `json:"messages"`
 	Tools    []ToolDefinition `json:"tools,omitempty"`
 	Stream   bool             `json:"stream"`
+	Think    any              `json:"think,omitempty"`
 }
 
 type ollamaStreamChunk struct {
@@ -48,11 +49,13 @@ func (ollamaClient) Provider() domain.Provider {
 
 func (ollamaClient) Chat(ctx context.Context, settings domain.ProviderSettings, request ChatRequest, onDelta DeltaHandler) (ChatResult, error) {
 	request.Stream = true
+	think := ollamaThinkProfile(request.Model)
 	body, err := json.Marshal(ollamaChatRequest{
 		Model:    request.Model,
 		Messages: request.Messages,
 		Tools:    request.Tools,
 		Stream:   true,
+		Think:    think,
 	})
 	if err != nil {
 		return ChatResult{}, fmt.Errorf("marshal ollama chat request: %w", err)
@@ -81,6 +84,24 @@ func (ollamaClient) Chat(ctx context.Context, settings domain.ProviderSettings, 
 	}
 
 	return readOllamaStream(response, onDelta)
+}
+
+func ollamaThinkProfile(model string) any {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	switch {
+	case strings.Contains(normalized, "qwen") && (strings.Contains(normalized, "3.5") || strings.Contains(normalized, "35")):
+		return true
+	case strings.Contains(normalized, "deepseek"):
+		return true
+	case strings.Contains(normalized, "gemma-4"),
+		strings.Contains(normalized, "gemma4"):
+		return true
+	case strings.HasPrefix(normalized, "glm-"),
+		strings.Contains(normalized, "glm-4"):
+		return true
+	default:
+		return nil
+	}
 }
 
 func ollamaChatURL(baseURL string) (string, error) {
