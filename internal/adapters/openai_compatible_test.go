@@ -264,3 +264,99 @@ func TestBuildOpenAICompatibleRequestKeepsNonVLLMClearFromTemplateKwargs(t *test
 		t.Fatalf("expected non-vLLM request to have no chat_template_kwargs, got %+v", request.ChatTemplateKwargs)
 	}
 }
+
+func TestResolveReasoningConfig(t *testing.T) {
+	t.Run("default fallback is enabled", func(t *testing.T) {
+		cfg, err := resolveReasoningConfig()
+		if err != nil {
+			t.Fatalf("resolve reasoning config: %v", err)
+		}
+		if !cfg.Fallback {
+			t.Fatalf("expected default fallback enabled")
+		}
+	})
+
+	t.Run("env supports global fallback and model map", func(t *testing.T) {
+		t.Setenv(reasoningFallbackEnv, "false")
+		t.Setenv(reasoningByModelEnv, `{"gemma-4-31b": false, "deepseek": true}`)
+
+		cfg, err := resolveReasoningConfig()
+		if err != nil {
+			t.Fatalf("resolve reasoning config: %v", err)
+		}
+		if cfg.Fallback {
+			t.Fatalf("expected global fallback disabled")
+		}
+		if len(cfg.ReasoningByModel) != 2 {
+			t.Fatalf("unexpected reasoning_by_model size: %d", len(cfg.ReasoningByModel))
+		}
+	})
+
+	t.Run("invalid bool returns explicit error", func(t *testing.T) {
+		t.Setenv(reasoningFallbackEnv, "maybe")
+		_, err := resolveReasoningConfig()
+		if err == nil {
+			t.Fatalf("expected parsing error for invalid fallback bool")
+		}
+	})
+}
+
+func TestReasoningConfigUseReasoningFallback(t *testing.T) {
+	cfg := reasoningConfig{
+		Fallback: false,
+		ReasoningByModel: map[string]bool{
+			"gemma-4":       false,
+			"deepseek-r1":   true,
+			"deepseek":      false,
+			"qwen3.5-coder": true,
+		},
+	}
+
+	if cfg.useReasoningFallback("gemma-4-31b-it") {
+		t.Fatalf("expected gemma pattern to disable fallback")
+	}
+	if !cfg.useReasoningFallback("deepseek-r1-distill") {
+		t.Fatalf("expected longest deepseek-r1 pattern to enable fallback")
+	}
+	if !cfg.useReasoningFallback("QWEN3.5-CODER") {
+		t.Fatalf("expected case-insensitive pattern match")
+	}
+	if cfg.useReasoningFallback("llama3.1") {
+		t.Fatalf("expected default fallback(false) for unmatched model")
+	}
+}
+
+func TestReadOpenAICompatibleStreamReasoningFallbackControl(t *testing.T) {
+	newResponse := func(body string) *http.Response {
+		return &http.Response{Body: io.NopCloser(strings.NewReader(body))}
+	}
+
+	payload := "data: {\"choices\":[{\"delta\":{\"reasoning\":\"hidden\"}}]}\n\n" +
+		"data: [DONE]\n\n"
+
+	resultFallbackOn, err := readOpenAICompatibleStream(
+		newResponse(payload),
+		"deepseek-r1",
+		reasoningConfig{Fallback: false, ReasoningByModel: map[string]bool{"deepseek": true}},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("read stream with model override: %v", err)
+	}
+	if resultFallbackOn.Reasoning != "hidden" {
+		t.Fatalf("expected reasoning when model override enables fallback, got %q", resultFallbackOn.Reasoning)
+	}
+
+	resultFallbackOff, err := readOpenAICompatibleStream(
+		newResponse(payload),
+		"gemma-4-31b",
+		reasoningConfig{Fallback: false, ReasoningByModel: map[string]bool{"gemma-4": false}},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("read stream with disabled fallback: %v", err)
+	}
+	if resultFallbackOff.Reasoning != "" {
+		t.Fatalf("expected empty reasoning when fallback disabled, got %q", resultFallbackOff.Reasoning)
+	}
+}
