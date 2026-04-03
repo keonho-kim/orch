@@ -97,6 +97,10 @@ Provider notes:
 - `azure.model` is the Azure deployment name.
 - `vertex` uses Vertex AI Express Mode API-key auth.
 - `bedrock.base_url` must point at the regional Bedrock Mantle `/v1` endpoint.
+- OpenAI 호환 reasoning fallback 운영자 제어:
+  - `ORCH_OPENAI_REASONING_FALLBACK=true|false` (기본값: `true`)
+  - `ORCH_OPENAI_REASONING_BY_MODEL='{"gemma-4-31b": false, "deepseek-r1": true}'`
+  - `ORCH_OPENAI_REASONING_BY_MODEL` 키는 모델명 부분 문자열 패턴으로 매칭되며, 가장 긴 패턴이 우선 적용된다.
 
 ## Key Runtime Changes
 

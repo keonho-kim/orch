@@ -19,6 +19,11 @@ type openAICompatibleClient struct {
 	provider domain.Provider
 }
 
+const (
+	reasoningFallbackEnv = "ORCH_OPENAI_REASONING_FALLBACK"
+	reasoningByModelEnv  = "ORCH_OPENAI_REASONING_BY_MODEL"
+)
+
 type openAIStreamOptions struct {
 	IncludeUsage bool `json:"include_usage"`
 }
@@ -105,7 +110,11 @@ func (c openAICompatibleClient) Chat(ctx context.Context, settings domain.Provid
 		return ChatResult{}, fmt.Errorf("chat request failed: status=%s body=%s", response.Status, strings.TrimSpace(string(data)))
 	}
 
-	return readOpenAICompatibleStream(response, onDelta)
+	reasoningConfig, err := resolveReasoningConfig()
+	if err != nil {
+		return ChatResult{}, err
+	}
+	return readOpenAICompatibleStream(response, request.Model, reasoningConfig, onDelta)
 }
 
 func buildOpenAICompatibleRequest(provider domain.Provider, request ChatRequest) (openAICompatibleRequest, error) {
@@ -253,7 +262,64 @@ func requiredAPIKey(settings domain.ProviderSettings, provider domain.Provider) 
 	return apiKey, nil
 }
 
-func readOpenAICompatibleStream(response *http.Response, onDelta DeltaHandler) (ChatResult, error) {
+type reasoningConfig struct {
+	Fallback         bool
+	ReasoningByModel map[string]bool
+}
+
+func resolveReasoningConfig() (reasoningConfig, error) {
+	config := reasoningConfig{
+		Fallback: true,
+	}
+
+	if raw := strings.TrimSpace(os.Getenv(reasoningFallbackEnv)); raw != "" {
+		switch strings.ToLower(raw) {
+		case "1", "true", "yes", "on":
+			config.Fallback = true
+		case "0", "false", "no", "off":
+			config.Fallback = false
+		default:
+			return reasoningConfig{}, fmt.Errorf("parse %s: unsupported bool value %q", reasoningFallbackEnv, raw)
+		}
+	}
+
+	if raw := strings.TrimSpace(os.Getenv(reasoningByModelEnv)); raw != "" {
+		parsed := map[string]bool{}
+		if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+			return reasoningConfig{}, fmt.Errorf("parse %s as JSON object map[string]bool: %w", reasoningByModelEnv, err)
+		}
+		config.ReasoningByModel = parsed
+	}
+
+	return config, nil
+}
+
+func (c reasoningConfig) useReasoningFallback(model string) bool {
+	if len(c.ReasoningByModel) == 0 {
+		return c.Fallback
+	}
+
+	normalizedModel := strings.ToLower(strings.TrimSpace(model))
+	selected := c.Fallback
+	bestLen := -1
+	for pattern, enabled := range c.ReasoningByModel {
+		normalizedPattern := strings.ToLower(strings.TrimSpace(pattern))
+		if normalizedPattern == "" {
+			continue
+		}
+		if !strings.Contains(normalizedModel, normalizedPattern) {
+			continue
+		}
+		if len(normalizedPattern) > bestLen {
+			bestLen = len(normalizedPattern)
+			selected = enabled
+		}
+	}
+
+	return selected
+}
+
+func readOpenAICompatibleStream(response *http.Response, model string, config reasoningConfig, onDelta DeltaHandler) (ChatResult, error) {
 	scanner := bufio.NewScanner(response.Body)
 	scanner.Buffer(make([]byte, 0, 4096), 1024*1024)
 
@@ -292,7 +358,7 @@ func readOpenAICompatibleStream(response *http.Response, onDelta DeltaHandler) (
 
 		for _, choice := range envelope.Choices {
 			reasoningChunk := choice.Delta.ReasoningContent
-			if reasoningChunk == "" {
+			if reasoningChunk == "" && config.useReasoningFallback(model) {
 				reasoningChunk = choice.Delta.Reasoning
 			}
 			if reasoningChunk != "" {
