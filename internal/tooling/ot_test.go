@@ -53,7 +53,9 @@ func TestInspectOTReadOutsideWorkspaceUsesAbsoluteDisplay(t *testing.T) {
 	if err := os.WriteFile(target, []byte("hello"), 0o644); err != nil {
 		t.Fatalf("write target: %v", err)
 	}
-	defer os.Remove(target)
+	defer func() {
+		_ = os.Remove(target)
+	}()
 
 	record := domain.RunRecord{WorkspacePath: workspace, CurrentCwd: workspace}
 	inspection, err := inspectOTRequest(workspace, record, domain.ExecRequest{
@@ -98,7 +100,9 @@ func TestInspectOTRejectsHiddenOutsidePath(t *testing.T) {
 	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
 		t.Fatalf("mkdir hidden dir: %v", err)
 	}
-	defer os.RemoveAll(outsideDir)
+	defer func() {
+		_ = os.RemoveAll(outsideDir)
+	}()
 
 	record := domain.RunRecord{WorkspacePath: workspace, CurrentCwd: workspace}
 	_, err := inspectOTRequest(workspace, record, domain.ExecRequest{

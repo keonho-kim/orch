@@ -134,7 +134,9 @@ func searchFile(path string, pattern *regexp.Regexp, stdout io.Writer) (bool, er
 	if err != nil {
 		return false, fmt.Errorf("open %s: %w", path, err)
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 4096), 1024*1024)

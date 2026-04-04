@@ -53,7 +53,9 @@ func run(args []string) error {
 	}
 
 	if output != "" {
-		fmt.Fprint(os.Stdout, output)
+		if _, err := fmt.Fprint(os.Stdout, output); err != nil {
+			return err
+		}
 	}
 	return nil
 }

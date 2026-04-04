@@ -75,7 +75,9 @@ func copyFile(source string, target string) error {
 	if err != nil {
 		return fmt.Errorf("open source file %s: %w", source, err)
 	}
-	defer in.Close()
+	defer func() {
+		_ = in.Close()
+	}()
 
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return fmt.Errorf("create parent directory for %s: %w", target, err)
@@ -85,7 +87,9 @@ func copyFile(source string, target string) error {
 	if err != nil {
 		return fmt.Errorf("create target file %s: %w", target, err)
 	}
-	defer out.Close()
+	defer func() {
+		_ = out.Close()
+	}()
 
 	if _, err := io.Copy(out, in); err != nil {
 		return fmt.Errorf("copy %s to %s: %w", source, target, err)

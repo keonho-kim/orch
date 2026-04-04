@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/keonho-kim/orch/domain"
@@ -19,6 +20,9 @@ func TestResolvePaths(t *testing.T) {
 	if paths.TestWorkspace != filepath.Join(repoRoot, "test-workspace") {
 		t.Fatalf("unexpected test workspace path: %s", paths.TestWorkspace)
 	}
+	if paths.ConfigFile != filepath.Join(repoRoot, "orch.toml") {
+		t.Fatalf("unexpected config file path: %s", paths.ConfigFile)
+	}
 }
 
 func TestSaveAndLoadSettings(t *testing.T) {
@@ -31,26 +35,18 @@ func TestSaveAndLoadSettings(t *testing.T) {
 	}
 
 	settings := domain.Settings{
-		DefaultProvider: domain.ProviderOllama,
+		DefaultProvider: domain.ProviderChatGPT,
 		Providers: domain.ProviderCatalog{
 			Ollama: domain.ProviderSettings{
-				BaseURL: "http://localhost:11434/v1",
-				Model:   "qwen2.5-coder",
-			},
-			VLLM: domain.ProviderSettings{
-				BaseURL:   "http://localhost:8000/v1",
-				Model:     "deepseek-coder",
-				APIKeyEnv: "VLLM_API_KEY",
-			},
-			Azure: domain.ProviderSettings{
-				BaseURL:   "https://example.openai.azure.com",
-				Model:     "gpt-4.1-deployment",
-				APIKeyEnv: "AZURE_OPENAI_API_KEY",
+				Endpoint:  "http://localhost:11434/v1",
+				Model:     "qwen2.5-coder",
+				Reasoning: "high",
 			},
 			ChatGPT: domain.ProviderSettings{
-				BaseURL:   "https://api.openai.com/v1",
-				Model:     "gpt-4.1",
-				APIKeyEnv: "OPENAI_API_KEY",
+				Endpoint:  "https://api.openai.com/v1",
+				Model:     "gpt-5.3-codex",
+				APIKey:    "secret-openai-key",
+				Reasoning: "xhigh",
 			},
 		},
 		ApprovalPolicy:    domain.ApprovalConfirmMutations,
@@ -67,30 +63,21 @@ func TestSaveAndLoadSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load settings: %v", err)
 	}
-	if loaded.DefaultProvider != domain.ProviderOllama {
+	if loaded.DefaultProvider != domain.ProviderChatGPT {
 		t.Fatalf("unexpected default provider: %s", loaded.DefaultProvider)
 	}
-	if loaded.ConfigFor(domain.ProviderOllama).Model != "qwen2.5-coder" {
-		t.Fatalf("unexpected ollama model: %s", loaded.ConfigFor(domain.ProviderOllama).Model)
+	if loaded.ConfigFor(domain.ProviderOllama).Reasoning != "high" {
+		t.Fatalf("unexpected ollama reasoning: %q", loaded.ConfigFor(domain.ProviderOllama).Reasoning)
 	}
-	if loaded.ConfigFor(domain.ProviderAzure).Model != "gpt-4.1-deployment" {
-		t.Fatalf("unexpected Azure model: %s", loaded.ConfigFor(domain.ProviderAzure).Model)
-	}
-	if loaded.ConfigFor(domain.ProviderChatGPT).APIKeyEnv != "OPENAI_API_KEY" {
-		t.Fatalf("unexpected ChatGPT API key env: %s", loaded.ConfigFor(domain.ProviderChatGPT).APIKeyEnv)
+	if loaded.ConfigFor(domain.ProviderChatGPT).APIKey != "secret-openai-key" {
+		t.Fatalf("unexpected ChatGPT API key: %q", loaded.ConfigFor(domain.ProviderChatGPT).APIKey)
 	}
 	if !loaded.SelfDrivingMode {
 		t.Fatal("expected self-driving mode to round-trip")
 	}
-	if loaded.ReactRalphIter != 5 || loaded.PlanRalphIter != 7 {
-		t.Fatalf("unexpected Ralph settings: react=%d plan=%d", loaded.ReactRalphIter, loaded.PlanRalphIter)
-	}
-	if loaded.CompactThresholdK != 150 {
-		t.Fatalf("unexpected compact threshold: %d", loaded.CompactThresholdK)
-	}
 }
 
-func TestLoadSettingsIgnoresLegacyKeys(t *testing.T) {
+func TestLoadDocumentRejectsLegacyJSONSettings(t *testing.T) {
 	setTestConfigHome(t)
 
 	repoRoot := t.TempDir()
@@ -99,16 +86,53 @@ func TestLoadSettingsIgnoresLegacyKeys(t *testing.T) {
 		t.Fatalf("resolve paths: %v", err)
 	}
 
-	if err := os.WriteFile(paths.SettingsFile, []byte("{\n  \"default_engine\": \"codex\"\n}\n"), 0o644); err != nil {
-		t.Fatalf("write settings file: %v", err)
+	if err := os.WriteFile(paths.LegacyProjectSettingsFile, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write legacy settings: %v", err)
 	}
 
-	loaded, err := LoadSettings(paths)
-	if err != nil {
-		t.Fatalf("load settings: %v", err)
+	_, err = LoadDocument(paths)
+	if err == nil || !strings.Contains(err.Error(), "legacy JSON settings") {
+		t.Fatalf("expected legacy settings error, got %v", err)
 	}
-	if loaded.DefaultProvider != "" {
-		t.Fatalf("expected no migrated provider, got %s", loaded.DefaultProvider)
+}
+
+func TestSaveSettingsAddsGitExcludeEntry(t *testing.T) {
+	setTestConfigHome(t)
+
+	repoRoot := t.TempDir()
+	paths, err := ResolvePaths(repoRoot)
+	if err != nil {
+		t.Fatalf("resolve paths: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git", "info"), 0o755); err != nil {
+		t.Fatalf("create git info: %v", err)
+	}
+
+	if err := SaveSettings(paths, domain.Settings{}); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(repoRoot, ".git", "info", "exclude"))
+	if err != nil {
+		t.Fatalf("read exclude: %v", err)
+	}
+	if string(data) != "orch.toml\n" {
+		t.Fatalf("unexpected exclude contents: %q", string(data))
+	}
+}
+
+func TestMarshalDocumentRedactsAPIKeys(t *testing.T) {
+	document := DefaultDocument()
+	document.Provider = "chatgpt"
+	document.Providers.ChatGPT.APIKey = "1234567890abcdefghijklmnopqrstuvwxyz"
+
+	data, err := MarshalDocument(document, true)
+	if err != nil {
+		t.Fatalf("marshal document: %v", err)
+	}
+	output := string(data)
+	if !strings.Contains(output, `api_key = "1234567890***vwxyz"`) {
+		t.Fatalf("expected masked API key, got %s", output)
 	}
 }
 

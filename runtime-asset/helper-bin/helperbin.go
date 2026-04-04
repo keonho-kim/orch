@@ -127,14 +127,16 @@ func ensureExecutableFile(path string, data []byte) error {
 		return fmt.Errorf("create temp helper: %w", err)
 	}
 	tempPath := temp.Name()
-	defer os.Remove(tempPath)
+	defer func() {
+		_ = os.Remove(tempPath)
+	}()
 
 	if _, err := temp.Write(data); err != nil {
-		temp.Close()
+		_ = temp.Close()
 		return fmt.Errorf("write temp helper: %w", err)
 	}
 	if err := temp.Chmod(0o755); err != nil {
-		temp.Close()
+		_ = temp.Close()
 		return fmt.Errorf("chmod temp helper: %w", err)
 	}
 	if err := temp.Close(); err != nil {

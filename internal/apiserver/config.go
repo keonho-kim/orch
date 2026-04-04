@@ -1,7 +1,6 @@
 package apiserver
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,8 +8,35 @@ import (
 
 	"github.com/keonho-kim/orch/domain"
 	"github.com/keonho-kim/orch/internal/config"
-	sqlitestore "github.com/keonho-kim/orch/internal/store/sqlite"
 )
+
+type providerPatch struct {
+	Endpoint  *string `json:"endpoint,omitempty"`
+	Model     *string `json:"model,omitempty"`
+	APIKey    *string `json:"api_key,omitempty"`
+	Reasoning *string `json:"reasoning,omitempty"`
+}
+
+type configPatchRequest struct {
+	Provider          *string       `json:"provider,omitempty"`
+	ApprovalPolicy    *string       `json:"approval_policy,omitempty"`
+	SelfDrivingMode   *bool         `json:"self_driving_mode,omitempty"`
+	ReactRalphIter    *int          `json:"react_ralph_iter,omitempty"`
+	PlanRalphIter     *int          `json:"plan_ralph_iter,omitempty"`
+	CompactThresholdK *int          `json:"compact_threshold_k,omitempty"`
+	Providers         *providerList `json:"providers,omitempty"`
+}
+
+type providerList struct {
+	Ollama  *providerPatch `json:"ollama,omitempty"`
+	VLLM    *providerPatch `json:"vllm,omitempty"`
+	Gemini  *providerPatch `json:"gemini,omitempty"`
+	Vertex  *providerPatch `json:"vertex,omitempty"`
+	Bedrock *providerPatch `json:"bedrock,omitempty"`
+	Claude  *providerPatch `json:"claude,omitempty"`
+	Azure   *providerPatch `json:"azure,omitempty"`
+	ChatGPT *providerPatch `json:"chatgpt,omitempty"`
+}
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -24,134 +50,53 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
-	scope, err := config.ParseScope(strings.TrimSpace(r.URL.Query().Get("scope")))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if raw := strings.TrimSpace(r.URL.RawQuery); raw != "" {
+		writeError(w, http.StatusBadRequest, "config endpoint no longer supports query parameters")
 		return
 	}
-	if scope == "" {
-		scope = config.ScopeEffective
-	}
-	showOrigin := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("show_origin")), "true")
-	resolved := s.service.ConfigState()
 
-	entries := make(map[string]string, len(config.AllSettingKeys()))
-	origins := make(map[string]config.SourceInfo)
-	switch scope {
-	case config.ScopeEffective:
-		for _, key := range config.AllSettingKeys() {
-			value, _ := configValueForKey(resolved.Effective, key)
-			entries[string(key)] = value
-			if showOrigin {
-				origins[string(key)] = resolved.Sources[key]
-			}
-		}
-	default:
-		scopeSettings := resolved.Scopes[scope]
-		scopeFile := resolved.Files[scope]
-		for _, key := range config.AllSettingKeys() {
-			value, _ := scopeSettings.ValueForKey(key)
-			entries[string(key)] = value
-			if showOrigin {
-				if _, ok := scopeSettings.ValueForKey(key); ok {
-					origins[string(key)] = config.SourceInfo{Scope: scope, File: scopeFile}
-				}
-			}
-		}
+	state := s.service.ConfigState()
+	document := state.Document
+	for _, provider := range domain.Providers() {
+		target := document.Providers.Provider(provider)
+		target.APIKey = config.MaskSecret(target.APIKey)
 	}
 
-	response := map[string]any{
-		"scope":   scope,
-		"entries": entries,
-	}
-	if showOrigin {
-		response["origins"] = origins
-	}
-	writeJSON(w, http.StatusOK, response)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"path":   state.Path,
+		"config": document,
+	})
 }
 
 func (s *Server) handleConfigPatch(w http.ResponseWriter, r *http.Request) {
-	scope, err := config.ParseScope(strings.TrimSpace(r.URL.Query().Get("scope")))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if scope == "" {
-		scope = config.ScopeProject
-	}
-	if scope == config.ScopeManaged || scope == config.ScopeEffective || scope == config.ScopeBuiltin {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("%s scope is read-only", scope))
-		return
-	}
-
-	var body struct {
-		Set   map[string]string `json:"set"`
-		Unset []string          `json:"unset"`
-	}
+	var body configPatchRequest
 	if err := jsonDecode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	store, err := sqlitestore.Open(s.paths.DBPath)
+	document, err := config.LoadDocument(s.paths)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	defer store.Close()
-
-	resolved, err := config.LoadResolvedSettings(s.paths)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if err := migrateLegacyDefaultProvider(s.paths, store, resolved); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	scopeSettings, err := config.LoadScopeSettings(s.paths, scope)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	unsetKeys := make([]config.SettingKey, 0, len(body.Unset))
-	for _, raw := range body.Unset {
-		key, err := config.ParseSettingKey(raw)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		unsetKeys = append(unsetKeys, key)
-		configValueUnset(&scopeSettings, key)
-	}
-
-	for rawKey, value := range body.Set {
-		key, err := config.ParseSettingKey(rawKey)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		for _, unsetKey := range unsetKeys {
-			if unsetKey == key {
-				writeError(w, http.StatusBadRequest, fmt.Sprintf("unset conflicts with set for %s", key))
-				return
-			}
-		}
-		if err := scopeSettings.SetKey(key, value); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
-
-	if err := s.service.SaveScopeSettings(scope, scopeSettings); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := config.ApplyDocumentPatch(&document, documentPatchFromRequest(body)); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	settings, err := document.ToSettings()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.service.SaveSettings(settings); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"scope": scope,
-		"ok":    true,
+		"path": s.paths.ConfigFile,
+		"ok":   true,
 	})
 }
 
@@ -164,167 +109,60 @@ func jsonDecode(r *http.Request, target any) error {
 	return nil
 }
 
-func migrateLegacyDefaultProvider(paths config.Paths, store *sqlitestore.Store, resolved config.ResolvedSettings) error {
-	if _, ok := resolved.Sources[config.KeyDefaultProvider]; ok {
-		return nil
+func documentPatchFromRequest(body configPatchRequest) config.DocumentPatch {
+	patch := config.DocumentPatch{}
+	if body.Provider != nil {
+		patch.Provider = body.Provider
 	}
-
-	stored, err := store.LoadSettings(context.Background())
-	if err != nil || stored.DefaultProvider == "" {
-		return nil
+	if body.ApprovalPolicy != nil {
+		patch.ApprovalPolicy = body.ApprovalPolicy
 	}
-
-	userSettings, err := config.LoadScopeSettings(paths, config.ScopeUser)
-	if err != nil {
-		return err
+	if body.SelfDrivingMode != nil {
+		patch.SelfDrivingMode = body.SelfDrivingMode
 	}
-	value := stored.DefaultProvider.String()
-	userSettings.DefaultProvider = &value
-	return config.SaveScopeSettings(paths, config.ScopeUser, userSettings)
-}
-
-func configValueUnset(settings *config.ScopeSettings, key config.SettingKey) {
-	switch key {
-	case config.KeyDefaultProvider:
-		settings.DefaultProvider = nil
-	case config.KeyApprovalPolicy:
-		settings.ApprovalPolicy = nil
-	case config.KeySelfDrivingMode:
-		settings.SelfDrivingMode = nil
-	case config.KeyReactRalphIter:
-		settings.ReactRalphIter = nil
-	case config.KeyPlanRalphIter:
-		settings.PlanRalphIter = nil
-	case config.KeyCompactThresholdK:
-		settings.CompactThresholdK = nil
-	default:
-		provider, attr, ok := parseProviderConfigKey(key)
-		if !ok || settings.Providers == nil {
-			return
+	if body.ReactRalphIter != nil {
+		patch.ReactRalphIter = body.ReactRalphIter
+	}
+	if body.PlanRalphIter != nil {
+		patch.PlanRalphIter = body.PlanRalphIter
+	}
+	if body.CompactThresholdK != nil {
+		patch.CompactThresholdK = body.CompactThresholdK
+	}
+	if body.Providers != nil {
+		if body.Providers.Ollama != nil {
+			patch.SetProviderPatch(domain.ProviderOllama, providerPatchFromRequest(*body.Providers.Ollama))
 		}
-		patch := providerPatchPtr(settings.Providers, provider)
-		if patch == nil {
-			return
+		if body.Providers.VLLM != nil {
+			patch.SetProviderPatch(domain.ProviderVLLM, providerPatchFromRequest(*body.Providers.VLLM))
 		}
-		switch attr {
-		case "base_url":
-			patch.BaseURL = nil
-		case "model":
-			patch.Model = nil
-		case "api_key_env":
-			patch.APIKeyEnv = nil
+		if body.Providers.Gemini != nil {
+			patch.SetProviderPatch(domain.ProviderGemini, providerPatchFromRequest(*body.Providers.Gemini))
 		}
-		if providerPatchEmpty(patch) {
-			setProviderPatchPtr(settings.Providers, provider, nil)
+		if body.Providers.Vertex != nil {
+			patch.SetProviderPatch(domain.ProviderVertex, providerPatchFromRequest(*body.Providers.Vertex))
 		}
-		if providerCatalogEmpty(settings.Providers) {
-			settings.Providers = nil
+		if body.Providers.Bedrock != nil {
+			patch.SetProviderPatch(domain.ProviderBedrock, providerPatchFromRequest(*body.Providers.Bedrock))
+		}
+		if body.Providers.Claude != nil {
+			patch.SetProviderPatch(domain.ProviderClaude, providerPatchFromRequest(*body.Providers.Claude))
+		}
+		if body.Providers.Azure != nil {
+			patch.SetProviderPatch(domain.ProviderAzure, providerPatchFromRequest(*body.Providers.Azure))
+		}
+		if body.Providers.ChatGPT != nil {
+			patch.SetProviderPatch(domain.ProviderChatGPT, providerPatchFromRequest(*body.Providers.ChatGPT))
 		}
 	}
+	return patch
 }
 
-func configValueForKey(settings domain.Settings, key config.SettingKey) (string, bool) {
-	switch key {
-	case config.KeyDefaultProvider:
-		return settings.DefaultProvider.String(), true
-	case config.KeyApprovalPolicy:
-		return string(settings.ApprovalPolicy), true
-	case config.KeySelfDrivingMode:
-		return fmt.Sprintf("%t", settings.SelfDrivingMode), true
-	case config.KeyReactRalphIter:
-		return fmt.Sprintf("%d", settings.ReactRalphIter), true
-	case config.KeyPlanRalphIter:
-		return fmt.Sprintf("%d", settings.PlanRalphIter), true
-	case config.KeyCompactThresholdK:
-		return fmt.Sprintf("%d", settings.CompactThresholdK), true
-	default:
-		provider, attr, ok := parseProviderConfigKey(key)
-		if !ok {
-			return "", false
-		}
-		providerSettings := settings.ConfigFor(provider)
-		switch attr {
-		case "base_url":
-			return providerSettings.BaseURL, true
-		case "model":
-			return providerSettings.Model, true
-		case "api_key_env":
-			return providerSettings.APIKeyEnv, true
-		default:
-			return "", false
-		}
+func providerPatchFromRequest(patch providerPatch) config.ProviderPatch {
+	return config.ProviderPatch{
+		Endpoint:  patch.Endpoint,
+		Model:     patch.Model,
+		APIKey:    patch.APIKey,
+		Reasoning: patch.Reasoning,
 	}
-}
-
-func parseProviderConfigKey(key config.SettingKey) (domain.Provider, string, bool) {
-	raw := strings.TrimPrefix(string(key), "providers.")
-	parts := strings.Split(raw, ".")
-	if len(parts) != 2 {
-		return "", "", false
-	}
-	provider, err := domain.ParseProvider(parts[0])
-	if err != nil {
-		return "", "", false
-	}
-	return provider, parts[1], true
-}
-
-func providerPatchPtr(catalog *config.ProviderCatalogPatch, provider domain.Provider) *config.ProviderSettingsPatch {
-	switch provider {
-	case domain.ProviderOllama:
-		return catalog.Ollama
-	case domain.ProviderVLLM:
-		return catalog.VLLM
-	case domain.ProviderGemini:
-		return catalog.Gemini
-	case domain.ProviderVertex:
-		return catalog.Vertex
-	case domain.ProviderBedrock:
-		return catalog.Bedrock
-	case domain.ProviderClaude:
-		return catalog.Claude
-	case domain.ProviderAzure:
-		return catalog.Azure
-	case domain.ProviderChatGPT:
-		return catalog.ChatGPT
-	default:
-		return nil
-	}
-}
-
-func setProviderPatchPtr(catalog *config.ProviderCatalogPatch, provider domain.Provider, patch *config.ProviderSettingsPatch) {
-	switch provider {
-	case domain.ProviderOllama:
-		catalog.Ollama = patch
-	case domain.ProviderVLLM:
-		catalog.VLLM = patch
-	case domain.ProviderGemini:
-		catalog.Gemini = patch
-	case domain.ProviderVertex:
-		catalog.Vertex = patch
-	case domain.ProviderBedrock:
-		catalog.Bedrock = patch
-	case domain.ProviderClaude:
-		catalog.Claude = patch
-	case domain.ProviderAzure:
-		catalog.Azure = patch
-	case domain.ProviderChatGPT:
-		catalog.ChatGPT = patch
-	}
-}
-
-func providerPatchEmpty(patch *config.ProviderSettingsPatch) bool {
-	return patch == nil || (patch.BaseURL == nil && patch.Model == nil && patch.APIKeyEnv == nil)
-}
-
-func providerCatalogEmpty(catalog *config.ProviderCatalogPatch) bool {
-	return catalog == nil ||
-		(catalog.Ollama == nil &&
-			catalog.VLLM == nil &&
-			catalog.Gemini == nil &&
-			catalog.Vertex == nil &&
-			catalog.Bedrock == nil &&
-			catalog.Claude == nil &&
-			catalog.Azure == nil &&
-			catalog.ChatGPT == nil)
 }

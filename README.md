@@ -1,143 +1,56 @@
 # orch
 
-`orch` is a local repository agent system optimized for smaller LLMs.
+`orch`는 로컬 저장소를 대상으로 동작하는 에이전트 런타임입니다. 현재 구조는 작은 모델에서도 일관된 실행 흐름을 유지하도록, 게이트웨이 조정자와 워커 실행자를 분리한 2계층 구조를 기본으로 사용합니다.
 
-The runtime now centers on:
+## 핵심 구조
 
-- a gateway agent that interprets requests and delegates execution work
-- worker agents that do only the assigned task contract
-- an OT-only model-facing tool contract
-- small role-specific system prompts loaded from bootstrap assets
-- dynamic context loading instead of large fixed prompt injection
+- 게이트웨이: 요청 해석, 작업 분해, 위임, 결과 종합
+- 워커: 위임된 작업 계약만 수행
+- 모델 도구 표면: `ot` 하나로 고정
+- 세션 지속성: `.orch/sessions/*.jsonl` 및 메타데이터
+- 런타임 워크스페이스: `test-workspace/`
+- 대화형 실행: TUI + 로컬 전용 HTTP/SSE API
 
-## Current Model
+## 설정
 
-| Area | Behavior |
-| --- | --- |
-| Primary interfaces | `orch`, `orch exec`, `orch config`, `orch history`, standalone `ot` |
-| Roles | gateway and worker |
-| Providers | `ollama`, `vllm`, `gemini`, `vertex`, `bedrock`, `claude`, `azure`, `chatgpt` |
-| Workspace | provisioned `test-workspace/` |
-| Session storage | `.orch/sessions/*.jsonl` + `.meta.json` |
-| Attached API | localhost-only HTTP + SSE during interactive TUI sessions |
-| Model-facing tool | `ot` only |
-| Continuity | compact summary + post-compact records |
+설정의 단일 소스 오브 트루스는 저장소 루트의 `orch.toml`입니다.
 
-## Configuration
+- 기본 경로: `<repo>/orch.toml`
+- 공통 오버라이드: `--env-file <path>.toml`
+- 사용 범위: `orch`, `orch exec`, `orch config`, TUI, 로컬 API 서버
 
-`orch` now resolves settings from four JSON scopes:
-
-1. `managed`
-2. `local`
-3. `project`
-4. `user`
-5. built-in defaults
-
-`managed` is machine policy and is read-only from the CLI and TUI. CLI flags apply only to the current command and sit above the persisted scopes.
-
-Scope files:
-
-- `managed`: `/Library/Application Support/orch/managed-settings.json` on macOS, `/etc/orch/managed-settings.json` on Linux/WSL, `%ProgramData%/orch/managed-settings.json` on Windows, or `ORCH_MANAGED_SETTINGS=<path>` for test and development overrides
-- `user`: `${os.UserConfigDir()}/orch/settings.json`
-- `project`: `<repo>/orch.settings.json`
-- `local`: `<repo>/.orch/settings.local.json`
-
-Use the TUI settings flow for interactive setup, or use the CLI for inspection and updates:
+예시:
 
 ```bash
 orch config --list
-orch config --list --show-origin
-orch config --list --scope project
-orch config --scope user --provider=ollama --model=qwen3.5:35b
-orch config --scope project --ollama-base-url=http://localhost:11434/v1 --self-driving-mode=true
-orch config --scope local --chatgpt-model=gpt-4.1 --chatgpt-api-key-env=OPENAI_API_KEY
-orch config --scope local --unset providers.chatgpt.model
-orch config --scope project --azure-base-url=https://example.openai.azure.com --azure-model=my-deployment --azure-api-key-env=AZURE_OPENAI_API_KEY
+orch config --provider=ollama --model=qwen3.5:35b --endpoint=http://localhost:11434/v1 --reasoning=high
+orch config --provider=chatgpt --model=gpt-5.3-codex --api-key="<secret>" --reasoning=xhigh
+orch config --env-file=.orch/dev.toml --provider=vllm --model=qwen3.5-coder --endpoint=http://localhost:8000/v1 --reasoning=false
 ```
 
-`orch config --list` prints the effective normalized runtime settings as flat `key=value` lines. Use `--scope <managed|user|project|local|effective>` to inspect a single layer, `--show-origin` to append the source scope and file for each effective key, and `--unset <key>` on editable scopes to fall back to lower layers.
+`orch config --list`는 정규화된 TOML을 출력하며, `api_key`는 `앞 10글자 + *** + 뒤 5글자` 형식으로 마스킹됩니다.
 
-Scope-less writes still target the `project` scope for backward compatibility.
+지원 provider:
 
-Supported write flags:
+- `ollama`
+- `vllm`
+- `gemini`
+- `vertex`
+- `bedrock`
+- `claude`
+- `azure`
+- `chatgpt`
 
-- `--provider`
-- `--model` when paired with `--provider`
-- `--ollama-base-url`
-- `--ollama-model`
-- `--vllm-base-url`
-- `--vllm-model`
-- `--vllm-api-key-env`
-- `--gemini-base-url`
-- `--gemini-model`
-- `--gemini-api-key-env`
-- `--vertex-base-url`
-- `--vertex-model`
-- `--vertex-api-key-env`
-- `--bedrock-base-url`
-- `--bedrock-model`
-- `--bedrock-api-key-env`
-- `--claude-base-url`
-- `--claude-model`
-- `--claude-api-key-env`
-- `--azure-base-url`
-- `--azure-model`
-- `--azure-api-key-env`
-- `--chatgpt-base-url`
-- `--chatgpt-model`
-- `--chatgpt-api-key-env`
-- `--approval-policy`
-- `--self-driving-mode`
-- `--react-ralph-iter`
-- `--plan-ralph-iter`
-- `--compact-threshold-k`
+reasoning 입력은 `true|false|low|medium|high|xhigh`를 사용합니다. 실제 전송 파라미터는 provider별 capability 규칙에 따라 매핑되며, 지원하지 않는 값은 명시적으로 오류를 반환합니다.
 
-Provider notes:
+## 런타임 동작
 
-- `azure.model` is the Azure deployment name.
-- `vertex` uses Vertex AI Express Mode API-key auth.
-- `bedrock.base_url` must point at the regional Bedrock Mantle `/v1` endpoint.
-- OpenAI 호환 reasoning fallback 운영자 제어:
-  - `ORCH_OPENAI_REASONING_FALLBACK=true|false` (기본값: `true`)
-  - `ORCH_OPENAI_REASONING_BY_MODEL='{"gemma-4-31b": false, "deepseek-r1": true}'`
-  - `ORCH_OPENAI_REASONING_BY_MODEL` 키는 모델명 부분 문자열 패턴으로 매칭되며, 가장 긴 패턴이 우선 적용된다.
+- 게이트웨이와 워커는 서로 다른 OT operation 집합을 사용합니다.
+- 실행 루프는 iteration 기반이며, 각 iteration에서 system prompt, context snapshot, tool catalog를 조립합니다.
+- OT 실행은 operation registry를 통해 validation, approval, execution을 같은 규칙으로 처리합니다.
+- provider transport는 provider spec과 stream decoder helper를 통해 공통 경로를 최대한 공유합니다.
 
-## Key Runtime Changes
-
-- `PRODUCT.md` is no longer provisioned into `test-workspace/` and is no longer injected into provider calls.
-- `runtime-asset/bootstrap/AGENTS.md` is now a small shared charter.
-- role-specific prompts live under `bootstrap/system-prompt/gateway/AGENTS.md` and `bootstrap/system-prompt/worker/AGENTS.md`
-- `bootstrap/TOOLS.md` is the canonical OT tool guide for prompting
-- the model no longer receives the generic `exec` tool
-- gateway and worker receive different OT capabilities
-- `bootstrap/USER.md` is shared user memory across sessions in the workspace
-- `.orch/chatHistory.md` is shared conversation memory with session-tagged entries and bounded prompt loading
-- delegated child worker sessions are exposed as first-class tasks derived from session metadata
-- each run persists a context snapshot so the active prompt inputs can be inspected later
-- interactive `orch` sessions now expose a local attached HTTP API server with repo-local discovery files under `.orch/api/`
-
-## Local API
-
-Interactive TUI launches now start an attached local HTTP API server in the same `orch` process.
-
-- bind: `127.0.0.1:<ephemeral-port>`
-- auth: `Authorization: Bearer <token>`
-- discovery files:
-  - `.orch/api/<session-id>.json`
-  - `.orch/api/current.json`
-- lifecycle: the attached API server exits when the interactive `orch` session exits
-
-Core endpoint mapping:
-
-- `orch exec` -> `POST /v1/exec`, `GET /v1/exec/{run_id}`, `GET /v1/exec/{run_id}/events`, `POST /v1/exec/{run_id}/approval`
-- `orch history` -> `GET /v1/history`, `GET /v1/history/latest`, `POST /v1/history/restore`
-- `orch config` -> `GET /v1/config`, `PATCH /v1/config`
-- session/process status -> `GET /v1/status`
-- global event stream -> `GET /v1/events`
-
-## OT Contract
-
-Gateway OT operations:
+게이트웨이 OT operation:
 
 - `context`
 - `task_list`
@@ -147,7 +60,7 @@ Gateway OT operations:
 - `list`
 - `search`
 
-Worker OT operations:
+워커 OT operation:
 
 - `context`
 - `task_list`
@@ -161,7 +74,7 @@ Worker OT operations:
 - `complete`
 - `fail`
 
-Plan mode remains read-only and allows only:
+Plan mode는 읽기 전용이며 아래 operation만 허용합니다.
 
 - `context`
 - `task_list`
@@ -170,25 +83,42 @@ Plan mode remains read-only and allows only:
 - `list`
 - `search`
 
-## Bootstrap Layout
+## 로컬 API
 
-Runtime bootstrap inputs:
+대화형 TUI 실행 시 같은 프로세스 안에서 로컬 API 서버가 시작됩니다.
 
-```text
-AGENTS.md
-bootstrap/TOOLS.md
-bootstrap/USER.md
-bootstrap/SKILLS.md
-bootstrap/skills/**
-bootstrap/system-prompt/gateway/AGENTS.md
-bootstrap/system-prompt/worker/AGENTS.md
-tools/**
-```
+- bind: `127.0.0.1:<ephemeral-port>`
+- auth: `Authorization: Bearer <token>`
+- discovery 파일:
+  - `.orch/api/<session-id>.json`
+  - `.orch/api/current.json`
 
-`bootstrap/USER.md` is preserved across reprovisioning and acts as shared durable user memory.
+주요 엔드포인트:
 
-## Validation
+- `GET /v1/status`
+- `GET /v1/events`
+- `POST /v1/exec`
+- `GET /v1/exec/{run_id}`
+- `GET /v1/exec/{run_id}/events`
+- `POST /v1/exec/{run_id}/approval`
+- `GET /v1/history`
+- `GET /v1/history/latest`
+- `POST /v1/history/restore`
+- `GET /v1/config`
+- `PATCH /v1/config`
+
+## 구현 기준
+
+- provider 기본값과 필수 필드는 provider registry에서 관리합니다.
+- 설정 문서와 TUI는 `endpoint`, `model`, `api_key`, `reasoning` 명칭을 공통으로 사용합니다.
+- 거대 분기는 가능한 범위에서 registry, dispatcher, reducer 스타일 helper로 분해합니다.
+- 레거시 JSON 설정은 더 이상 지원하지 않으며, `orch.toml`로 수동 마이그레이션해야 합니다.
+
+## 검증
 
 ```bash
+gofmt -w .
 go test ./...
+go vet ./...
+golangci-lint run ./...
 ```

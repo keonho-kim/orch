@@ -137,7 +137,9 @@ func (s *Store) ListMessageHistory(ctx context.Context, limit int) ([]domain.Mes
 	if err != nil {
 		return nil, fmt.Errorf("list history: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var entries []domain.MessageHistoryEntry
 	for rows.Next() {
@@ -241,6 +243,28 @@ func (s *Store) ListRunsBySession(ctx context.Context, sessionID string, limit i
 }
 
 func (s *Store) listRuns(ctx context.Context, sessionID string, limit int) ([]domain.RunRecord, error) {
+	query, args := buildListRunsQuery(sessionID, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list runs: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	var records []domain.RunRecord
+	for rows.Next() {
+		record, err := scanRunRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+
+	return records, rows.Err()
+}
+
+func buildListRunsQuery(sessionID string, limit int) (string, []any) {
 	query := `
 		SELECT run_id, session_id, mode, provider, model, prompt, current_task, status,
 		       workspace_path, current_cwd, ralph_iteration, final_output, created_at, updated_at
@@ -256,61 +280,64 @@ func (s *Store) listRuns(ctx context.Context, sessionID string, limit int) ([]do
 		LIMIT ?
 	`
 	args = append(args, limit)
+	return query, args
+}
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+func scanRunRecord(scanner interface {
+	Scan(dest ...any) error
+}) (domain.RunRecord, error) {
+	var record domain.RunRecord
+	var sessionIDValue string
+	var modeRaw string
+	var providerRaw string
+	var createdAt string
+	var updatedAt string
+	if err := scanner.Scan(
+		&record.RunID,
+		&sessionIDValue,
+		&modeRaw,
+		&providerRaw,
+		&record.Model,
+		&record.Prompt,
+		&record.CurrentTask,
+		&record.Status,
+		&record.WorkspacePath,
+		&record.CurrentCwd,
+		&record.RalphIteration,
+		&record.FinalOutput,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return domain.RunRecord{}, fmt.Errorf("scan run: %w", err)
+	}
+	return normalizeRunRecord(record, sessionIDValue, modeRaw, providerRaw, createdAt, updatedAt)
+}
+
+func normalizeRunRecord(
+	record domain.RunRecord,
+	sessionIDValue string,
+	modeRaw string,
+	providerRaw string,
+	createdAt string,
+	updatedAt string,
+) (domain.RunRecord, error) {
+	mode, err := domain.ParseRunMode(modeRaw)
 	if err != nil {
-		return nil, fmt.Errorf("list runs: %w", err)
+		return domain.RunRecord{}, fmt.Errorf("parse run mode: %w", err)
 	}
-	defer rows.Close()
-
-	var records []domain.RunRecord
-	for rows.Next() {
-		var record domain.RunRecord
-		var sessionIDValue string
-		var modeRaw string
-		var providerRaw string
-		var createdAt string
-		var updatedAt string
-		if err := rows.Scan(
-			&record.RunID,
-			&sessionIDValue,
-			&modeRaw,
-			&providerRaw,
-			&record.Model,
-			&record.Prompt,
-			&record.CurrentTask,
-			&record.Status,
-			&record.WorkspacePath,
-			&record.CurrentCwd,
-			&record.RalphIteration,
-			&record.FinalOutput,
-			&createdAt,
-			&updatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scan run: %w", err)
-		}
-
-		mode, err := domain.ParseRunMode(modeRaw)
-		if err != nil {
-			return nil, fmt.Errorf("parse run mode: %w", err)
-		}
-		provider, err := domain.ParseProvider(providerRaw)
-		if err != nil {
-			return nil, fmt.Errorf("parse run provider: %w", err)
-		}
-
-		record.SessionID = sessionIDValue
-		record.Mode = mode
-		record.Provider = provider
-		if record.CurrentCwd == "" {
-			record.CurrentCwd = record.WorkspacePath
-		}
-		record.CreatedAt = parseSQLiteTime(createdAt)
-		record.UpdatedAt = parseSQLiteTime(updatedAt)
-		records = append(records, record)
+	provider, err := domain.ParseProvider(providerRaw)
+	if err != nil {
+		return domain.RunRecord{}, fmt.Errorf("parse run provider: %w", err)
 	}
-
-	return records, rows.Err()
+	record.SessionID = sessionIDValue
+	record.Mode = mode
+	record.Provider = provider
+	if record.CurrentCwd == "" {
+		record.CurrentCwd = record.WorkspacePath
+	}
+	record.CreatedAt = parseSQLiteTime(createdAt)
+	record.UpdatedAt = parseSQLiteTime(updatedAt)
+	return record, nil
 }
 
 func (s *Store) AppendRunEvent(ctx context.Context, event domain.RunEvent) error {

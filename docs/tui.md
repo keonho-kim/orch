@@ -1,218 +1,157 @@
 # TUI
 
-## Overview
+## 개요
 
-The TUI is the primary operator interface for `orch`. It uses the same orchestrator service as `orch exec`, but adds session browsing, modal approvals, provider setup, and a persistent timeline view.
+TUI는 `orch`의 기본 운영 인터페이스입니다. `orch exec`와 같은 orchestrator 서비스를 사용하지만, 세션 복원, 승인 모달, 설정 편집, 로컬 API 노출을 함께 제공합니다.
 
-It is session-oriented, not shell-oriented.
+대화형 TUI 실행 시 `.orch/api/current.json`에 로컬 API 연결 정보가 기록됩니다.
 
-Interactive TUI launches also start an attached local HTTP API server in the same process. Connection details are written to `.orch/api/current.json`.
+## 화면 구성
 
-## Layout Model
-
-| Area | Responsibility |
+| 영역 | 역할 |
 | --- | --- |
-| timeline | rendered run history, streamed output, active-run reasoning |
-| composer | prompt entry, slash command discovery, mode-aware submission |
-| command meta | current mode, provider, and model |
-| status line | inline state, warnings, and feedback |
-| modal views | approvals, settings, session history, exit confirmation |
+| timeline | run 이력, 스트리밍 출력, 활성 run reasoning 표시 |
+| composer | 프롬프트 입력, slash command, 실행 모드 전환 |
+| command meta | 현재 모드, provider, model 표시 |
+| status line | 상태, 경고, 저장 결과 표시 |
+| modal | approval, settings, history, exit confirmation |
 
-## First-Run Settings Gate
+## 초기 설정 게이트
 
-If the current settings do not define a usable default provider and model, the TUI opens directly into setup flow.
+기본 provider와 model이 유효하지 않으면 TUI는 바로 설정 플로우로 진입합니다.
 
-Current first-run behavior:
+현재 동작:
 
-- provider is chosen first
-- choosing `Ollama` enters URL selection and live model discovery
-- choosing `vLLM` switches to the manual settings form
-- choosing other cloud providers switches to the manual settings form
-- the setup flow saves into the `user` scope
-- the user cannot start runs until the default provider has a configured model
+- provider를 먼저 선택합니다.
+- `Ollama`를 선택하면 endpoint 확인과 모델 자동 탐색을 진행합니다.
+- 나머지 provider는 수동 설정 폼으로 이동합니다.
+- 설정 저장 대상은 항상 현재 `orch.toml`입니다.
+- 기본 provider가 유효해질 때까지 run을 시작할 수 없습니다.
 
-The status line reflects that requirement until settings are saved.
+## Composer 모드
 
-## Composer Modes
-
-The composer has two sticky modes:
+입력기는 두 가지 고정 모드를 가집니다.
 
 - `ReAct Deep Agent`
 - `Plan`
 
-`Shift+Tab` toggles between them.
-
-The active mode is shown in the command meta chip at the right side of the composer row.
+`Shift+Tab`으로 전환합니다.
 
 ## Slash Commands
 
-When the current input starts with `/`, the TUI shows a slash-command dropdown above the composer.
+입력이 `/`로 시작하면 composer 위에 slash command 메뉴가 열립니다.
 
-Current behavior:
+현재 명령:
 
-- `Up` / `Down` moves through the dropdown
-- `Tab` or `Enter` can complete a selected slash command
-- `Enter` executes the command once the full command is selected
-
-Current slash commands:
-
-| Command | Behavior |
+| 명령 | 동작 |
 | --- | --- |
-| `/clear` | open a new session and clear the visible conversation |
-| `/compact` | force session compaction |
-| `/context` | show the latest persisted context snapshot for the active run |
-| `/exit` | quit the application |
-| `/status` | show current session and active-run status, including child-task counts |
-| `/tasks` | list direct child tasks for the current session or inspect a specific task |
+| `/clear` | 새 세션을 열고 현재 대화를 비웁니다 |
+| `/compact` | 세션 compact를 강제로 실행합니다 |
+| `/context` | 최신 context snapshot을 보여줍니다 |
+| `/exit` | 애플리케이션을 종료합니다 |
+| `/status` | 현재 세션과 run 상태를 보여줍니다 |
+| `/tasks` | 현재 세션의 직속 child task 목록 또는 상세를 보여줍니다 |
 
-## Approval Modal
+## Approval 모달
 
-When a tool call requires approval, the normal dashboard view is replaced by an approval page.
+도구 실행에 승인이 필요하면 대시보드 대신 approval 화면이 표시됩니다.
 
-The modal shows:
+표시 정보:
 
 - run id
 - tool name
 - approval reason
 - raw tool arguments
 
-Controls:
+조작:
 
-- `Enter` or `Y` to approve
-- `Esc` or `N` to deny
+- `Enter` 또는 `Y`: 승인
+- `Esc` 또는 `N`: 거부
 
-## Session History Picker
+## Session History
 
-`orch history` launches the same TUI runtime and opens a session-history picker immediately.
+`orch history`는 같은 TUI를 실행하고 세션 선택기를 바로 엽니다.
 
-Picker behavior:
+선택기에서 보이는 정보:
 
-- `Up` / `Down` moves selection
-- `Enter` restores the selected session
-- `Esc` closes the picker
-
-The picker lists saved sessions by session id and title.
-
-Rows now also surface lineage-aware task metadata when available:
-
-- `child-of <session-id>` for delegated worker sessions
+- session id
+- title
+- parent session 연계 정보
 - worker role
 - task status
-- task title
-- provider and model
+- provider / model
 
-## Settings Modal
+## Settings 모달
 
-`Ctrl+S` opens settings.
+`Ctrl+S`로 설정 창을 엽니다.
 
-Current settings UI supports:
+현재 설정 UI는 아래 항목을 편집합니다.
 
-- scope tabs for `Effective`, `Managed`, `User`, `Project`, and `Local`
-- default provider selection
+- 기본 provider
 - `self_driving_mode`
-- Ollama base URL and model
-- vLLM base URL, model, and API key env name
-- Gemini base URL, model, and API key env name
-- Vertex base URL, model, and API key env name
-- Bedrock base URL, model, and API key env name
-- Claude base URL, model, and API key env name
-- Azure base URL, deployment name, and API key env name
-- ChatGPT base URL, model, and API key env name
+- provider별 `endpoint`
+- provider별 `model`
+- provider별 `api_key`
+- provider별 `reasoning`
 - `react_ralph_iter`
 - `plan_ralph_iter`
 - `compact_threshold_k`
 
-The `Effective` and `Managed` tabs are read-only. The editable tabs show scope-local values and use inherited placeholders for lower-scope values. `Ctrl+U` unsets the focused field in the active editable scope so the effective value falls back to a lower layer. If a field is enforced by managed settings, lower scopes show it as locked.
+설정 UI는 더 이상 scope 탭을 사용하지 않습니다. 단일 `orch.toml` 문서를 직접 편집하는 구조입니다.
 
-The first-run setup flow still keeps Ollama discovery, but all cloud providers enter the manual settings form directly and the first saved settings go to the `user` scope.
+설정 필드 구성은 provider별 개별 enum 나열이 아니라 schema 기반으로 생성됩니다.
 
-Changing providers inside the full form requires an explicit confirmation step.
+- 공통 필드: provider, `self_driving_mode`, `react_ralph_iter`, `plan_ralph_iter`, `compact_threshold_k`
+- provider 필드: `endpoint`, `model`, `api_key`, `reasoning`
+- field order, label, primary field는 provider와 field kind 조합에서 파생됩니다.
 
-The same provider/model state can also be inspected and updated outside the TUI:
+provider 변경 시에는 확인 단계를 거칩니다.
+
+동일 설정은 CLI에서도 관리할 수 있습니다.
 
 - `orch config --list`
-- `orch config --list --scope <managed|user|project|local|effective>`
-- `orch config --list --show-origin`
-- `orch config --scope <user|project|local> --provider=ollama --model=<name>`
-- `orch config --scope <user|project|local> --ollama-base-url=<url>`
-- `orch config --scope <user|project|local> --ollama-model=<name>`
-- `orch config --scope <user|project|local> --vllm-base-url=<url>`
-- `orch config --scope <user|project|local> --vllm-model=<name>`
-- `orch config --scope <user|project|local> --vllm-api-key-env=<env>`
-- `orch config --scope <user|project|local> --gemini-base-url=<url>`
-- `orch config --scope <user|project|local> --gemini-model=<name>`
-- `orch config --scope <user|project|local> --gemini-api-key-env=<env>`
-- `orch config --scope <user|project|local> --vertex-base-url=<url>`
-- `orch config --scope <user|project|local> --vertex-model=<name>`
-- `orch config --scope <user|project|local> --vertex-api-key-env=<env>`
-- `orch config --scope <user|project|local> --bedrock-base-url=<url>`
-- `orch config --scope <user|project|local> --bedrock-model=<name>`
-- `orch config --scope <user|project|local> --bedrock-api-key-env=<env>`
-- `orch config --scope <user|project|local> --claude-base-url=<url>`
-- `orch config --scope <user|project|local> --claude-model=<name>`
-- `orch config --scope <user|project|local> --claude-api-key-env=<env>`
-- `orch config --scope <user|project|local> --azure-base-url=<url>`
-- `orch config --scope <user|project|local> --azure-model=<deployment>`
-- `orch config --scope <user|project|local> --azure-api-key-env=<env>`
-- `orch config --scope <user|project|local> --chatgpt-base-url=<url>`
-- `orch config --scope <user|project|local> --chatgpt-model=<name>`
-- `orch config --scope <user|project|local> --chatgpt-api-key-env=<env>`
-- `orch config --scope <user|project|local> --approval-policy=<policy>`
-- `orch config --scope <user|project|local> --self-driving-mode=<true|false>`
-- `orch config --scope <user|project|local> --react-ralph-iter=<n>`
-- `orch config --scope <user|project|local> --plan-ralph-iter=<n>`
-- `orch config --scope <user|project|local> --compact-threshold-k=<n>`
-- `orch config --scope <user|project|local> --unset <key>`
+- `orch config --provider=ollama --model=<name> --endpoint=<url> --reasoning=<value>`
+- `orch config --provider=chatgpt --model=<name> --api-key=<secret> --reasoning=<value>`
+- `orch config --approval-policy=<policy>`
+- `orch config --self-driving-mode=<true|false>`
+- `orch config --react-ralph-iter=<n>`
+- `orch config --plan-ralph-iter=<n>`
+- `orch config --compact-threshold-k=<n>`
+- `orch config --env-file=<path>.toml ...`
 
-## Thinking Visibility
+## Reasoning 표시
 
-`Ctrl+T` toggles reasoning visibility for the active run.
+`Ctrl+T`는 활성 run의 reasoning 표시를 토글합니다.
 
-Rendering modes:
+표시 방식:
 
-- expanded bordered `THINK` block
-- collapsed `THINKING ...` placeholder
+- 확장된 `THINK` 블록
+- 접힌 `THINKING ...` 플레이스홀더
 
-Reasoning is visible in the TUI only. It is not written into the session transcript files.
+reasoning은 TUI에서만 보이며 세션 transcript 파일에는 저장되지 않습니다.
 
-## Navigation
+## 내비게이션
 
-| Key | Behavior |
+| 키 | 동작 |
 | --- | --- |
-| `Up` / `Down` | prompt history recall when slash menu is hidden |
-| `PgUp` / `PgDn` | page timeline |
-| `Home` / `End` | jump to top or bottom |
-| mouse wheel | scroll timeline |
-| `Ctrl+S` | open settings |
-| `Ctrl+T` | toggle active-run reasoning |
-| `Ctrl+C` | quit immediately |
+| `Up` / `Down` | slash menu가 없을 때 프롬프트 히스토리 이동 |
+| `PgUp` / `PgDn` | timeline 페이지 이동 |
+| `Home` / `End` | 맨 위 / 맨 아래 이동 |
+| mouse wheel | timeline 스크롤 |
+| `Ctrl+S` | 설정 창 열기 |
+| `Ctrl+T` | reasoning 표시 토글 |
+| `Ctrl+C` | 즉시 종료 |
 
-## `/clear` And `/exit`
+## `/clear` 와 `/exit`
 
-`/clear` means:
+`/clear`는 다음을 수행합니다.
 
-1. create a fresh session
-2. switch the UI to that session
-3. clear the visible conversation
-4. finalize the old session in the background
+1. 새 세션 생성
+2. UI를 새 세션으로 전환
+3. 이전 세션은 백그라운드 finalize
 
-Constraint:
+제약:
 
-- it does not open a new session while a run is active
+- 활성 run이 있는 동안에는 새 세션을 열지 않습니다.
 
-`/exit` is the controlled shutdown path. If a run is active, the TUI shows a confirmation modal before quitting.
-
-## Rendering Notes
-
-The timeline renders:
-
-- the `ORCH` wordmark and version
-- one section per run
-- `USER` and `ORCH` content blocks
-- a separate reasoning block for the active run
-
-Assistant output supports lightweight inline terminal styling for:
-
-- `**bold**`
-- `*italic*`
-- `__underline__`
+`/exit`는 정상 종료 경로입니다. 활성 run이 있으면 먼저 확인 모달이 열립니다.

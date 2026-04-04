@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -54,10 +53,7 @@ type vertexFunctionResponse struct {
 }
 
 type vertexGenerateContentResponse struct {
-	Candidates []struct {
-		Content      vertexContent `json:"content"`
-		FinishReason string        `json:"finishReason"`
-	} `json:"candidates"`
+	Candidates    []vertexCandidate `json:"candidates"`
 	UsageMetadata struct {
 		PromptTokenCount     int `json:"promptTokenCount"`
 		CandidatesTokenCount int `json:"candidatesTokenCount"`
@@ -65,11 +61,19 @@ type vertexGenerateContentResponse struct {
 	} `json:"usageMetadata"`
 }
 
+type vertexCandidate struct {
+	Content      vertexContent `json:"content"`
+	FinishReason string        `json:"finishReason"`
+}
+
 func (vertexClient) Provider() domain.Provider {
 	return domain.ProviderVertex
 }
 
 func (vertexClient) Chat(ctx context.Context, settings domain.ProviderSettings, request ChatRequest, onDelta DeltaHandler) (ChatResult, error) {
+	if strings.TrimSpace(settings.Reasoning) != "" {
+		return ChatResult{}, fmt.Errorf("vertex does not support configured reasoning transport")
+	}
 	apiKey, err := requiredAPIKey(settings, domain.ProviderVertex)
 	if err != nil {
 		return ChatResult{}, err
@@ -84,7 +88,7 @@ func (vertexClient) Chat(ctx context.Context, settings domain.ProviderSettings, 
 		return ChatResult{}, fmt.Errorf("marshal Vertex chat request: %w", err)
 	}
 
-	chatURL, err := vertexChatURL(settings.NormalizedBaseURL(), request.Model, apiKey)
+	chatURL, err := vertexChatURL(settings.NormalizedEndpoint(), request.Model, apiKey)
 	if err != nil {
 		return ChatResult{}, err
 	}
@@ -99,11 +103,13 @@ func (vertexClient) Chat(ctx context.Context, settings domain.ProviderSettings, 
 	if err != nil {
 		return ChatResult{}, fmt.Errorf("send Vertex chat request: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		data, _ := io.ReadAll(response.Body)
-		return ChatResult{}, fmt.Errorf("Vertex chat failed: status=%s body=%s", response.Status, strings.TrimSpace(string(data)))
+		return ChatResult{}, fmt.Errorf("vertex chat failed: status=%s body=%s", response.Status, strings.TrimSpace(string(data)))
 	}
 
 	return readVertexStream(response, onDelta)
@@ -204,10 +210,10 @@ func decodeToolResponseContent(raw string) any {
 
 func vertexChatURL(baseURL string, model string, apiKey string) (string, error) {
 	if strings.TrimSpace(baseURL) == "" {
-		return "", fmt.Errorf("Vertex base URL is required")
+		return "", fmt.Errorf("vertex endpoint is required")
 	}
 	if strings.TrimSpace(model) == "" {
-		return "", fmt.Errorf("Vertex model is required")
+		return "", fmt.Errorf("vertex model is required")
 	}
 
 	parsed, err := url.Parse(strings.TrimRight(baseURL, "/"))
@@ -222,67 +228,15 @@ func vertexChatURL(baseURL string, model string, apiKey string) (string, error) 
 }
 
 func readVertexStream(response *http.Response, onDelta DeltaHandler) (ChatResult, error) {
-	scanner := bufio.NewScanner(response.Body)
-	scanner.Buffer(make([]byte, 0, 4096), 1024*1024)
-
 	var content strings.Builder
 	toolCalls := make([]domain.ToolCall, 0)
 	finishReason := ""
 	usage := domain.UsageStats{}
 
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "data:") {
-			line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		}
-		if line == "[DONE]" {
-			break
-		}
-
-		var chunk vertexGenerateContentResponse
-		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
-			return ChatResult{}, fmt.Errorf("decode Vertex stream chunk: %w", err)
-		}
-
-		if chunk.UsageMetadata.TotalTokenCount > 0 || chunk.UsageMetadata.PromptTokenCount > 0 || chunk.UsageMetadata.CandidatesTokenCount > 0 {
-			usage = domain.UsageStats{
-				PromptTokens:     chunk.UsageMetadata.PromptTokenCount,
-				CompletionTokens: chunk.UsageMetadata.CandidatesTokenCount,
-				TotalTokens:      chunk.UsageMetadata.TotalTokenCount,
-			}
-		}
-
-		for _, candidate := range chunk.Candidates {
-			for _, part := range candidate.Content.Parts {
-				if part.Text != "" {
-					content.WriteString(part.Text)
-					if onDelta != nil {
-						if err := onDelta(Delta{Content: part.Text}); err != nil {
-							return ChatResult{}, err
-						}
-					}
-				}
-				if part.FunctionCall != nil {
-					arguments := "{}"
-					if len(part.FunctionCall.Args) > 0 {
-						arguments = string(part.FunctionCall.Args)
-					}
-					toolCalls = append(toolCalls, domain.ToolCall{
-						ID:        fmt.Sprintf("call_%d", len(toolCalls)+1),
-						Name:      part.FunctionCall.Name,
-						Arguments: arguments,
-					})
-				}
-			}
-			if candidate.FinishReason != "" {
-				finishReason = candidate.FinishReason
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
+	err := scanStreamLines(response.Body, streamScanOptions{StripDataPrefix: true}, func(line string) error {
+		return applyVertexChunk(line, onDelta, &content, &toolCalls, &finishReason, &usage)
+	})
+	if err != nil {
 		return ChatResult{}, fmt.Errorf("read Vertex stream: %w", err)
 	}
 
@@ -292,4 +246,92 @@ func readVertexStream(response *http.Response, onDelta DeltaHandler) (ChatResult
 		FinishReason: finishReason,
 		Usage:        usage,
 	}, nil
+}
+
+func applyVertexChunk(
+	line string,
+	onDelta DeltaHandler,
+	content *strings.Builder,
+	toolCalls *[]domain.ToolCall,
+	finishReason *string,
+	usage *domain.UsageStats,
+) error {
+	chunk, err := decodeVertexChunk(line)
+	if err != nil {
+		return err
+	}
+	mergeVertexUsage(usage, chunk)
+	for _, candidate := range chunk.Candidates {
+		if err := appendVertexCandidate(onDelta, content, toolCalls, candidate); err != nil {
+			return err
+		}
+		if candidate.FinishReason != "" {
+			*finishReason = candidate.FinishReason
+		}
+	}
+	return nil
+}
+
+func decodeVertexChunk(line string) (vertexGenerateContentResponse, error) {
+	var chunk vertexGenerateContentResponse
+	if err := json.Unmarshal([]byte(line), &chunk); err != nil {
+		return vertexGenerateContentResponse{}, fmt.Errorf("decode Vertex stream chunk: %w", err)
+	}
+	return chunk, nil
+}
+
+func mergeVertexUsage(target *domain.UsageStats, chunk vertexGenerateContentResponse) {
+	metadata := chunk.UsageMetadata
+	if metadata.TotalTokenCount == 0 && metadata.PromptTokenCount == 0 && metadata.CandidatesTokenCount == 0 {
+		return
+	}
+	*target = domain.UsageStats{
+		PromptTokens:     metadata.PromptTokenCount,
+		CompletionTokens: metadata.CandidatesTokenCount,
+		TotalTokens:      metadata.TotalTokenCount,
+	}
+}
+
+func appendVertexCandidate(
+	onDelta DeltaHandler,
+	content *strings.Builder,
+	toolCalls *[]domain.ToolCall,
+	candidate vertexCandidate,
+) error {
+	for _, part := range candidate.Content.Parts {
+		if err := appendVertexPart(onDelta, content, toolCalls, part); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func appendVertexPart(
+	onDelta DeltaHandler,
+	content *strings.Builder,
+	toolCalls *[]domain.ToolCall,
+	part vertexPart,
+) error {
+	if part.Text != "" {
+		content.WriteString(part.Text)
+		if err := emitDelta(onDelta, Delta{Content: part.Text}); err != nil {
+			return err
+		}
+	}
+	if part.FunctionCall != nil {
+		*toolCalls = append(*toolCalls, buildVertexToolCall(part.FunctionCall, len(*toolCalls)+1))
+	}
+	return nil
+}
+
+func buildVertexToolCall(call *vertexFunctionCall, index int) domain.ToolCall {
+	arguments := "{}"
+	if len(call.Args) > 0 {
+		arguments = string(call.Args)
+	}
+	return domain.ToolCall{
+		ID:        fmt.Sprintf("call_%d", index),
+		Name:      call.Name,
+		Arguments: arguments,
+	}
 }

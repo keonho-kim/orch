@@ -194,7 +194,9 @@ func writeJSONFileAtomic(path string, value any) error {
 		return fmt.Errorf("create temp %s: %w", filepath.Base(path), err)
 	}
 	tempPath := temp.Name()
-	defer os.Remove(tempPath)
+	defer func() {
+		_ = os.Remove(tempPath)
+	}()
 
 	if _, err := temp.Write(data); err != nil {
 		_ = temp.Close()

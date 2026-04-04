@@ -55,12 +55,12 @@ func (s *Server) handleExecPath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch {
-	case remainder == "":
+	switch remainder {
+	case "":
 		s.handleExecStatus(w, r, runID)
-	case remainder == "events":
+	case "events":
 		s.handleExecEvents(w, r, runID)
-	case remainder == "approval":
+	case "approval":
 		s.handleExecApproval(w, r, runID)
 	default:
 		writeError(w, http.StatusNotFound, "not found")

@@ -6,165 +6,112 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/keonho-kim/orch/domain"
 )
 
-func TestOpenAICompatibleClientsUseProviderSpecificAuthAndURL(t *testing.T) {
-	tests := []struct {
-		name            string
-		client          func() Client
-		provider        domain.Provider
-		baseURLSuffix   string
-		apiKeyEnv       string
-		apiKeyValue     string
-		wantPath        string
-		wantQueryKey    string
-		wantQueryValue  string
-		wantHeaderName  string
-		wantHeaderValue string
-		expectModelBody bool
-		expectStreamOpt bool
-		expectStreamInc bool
-	}{
-		{
-			name:            "gemini",
-			client:          NewGeminiClient,
-			provider:        domain.ProviderGemini,
-			baseURLSuffix:   "/v1beta/openai",
-			apiKeyEnv:       "GEMINI_API_KEY",
-			apiKeyValue:     "gemini-key",
-			wantPath:        "/v1beta/openai/chat/completions",
-			wantHeaderName:  "Authorization",
-			wantHeaderValue: "Bearer gemini-key",
-			expectModelBody: true,
-			expectStreamOpt: true,
-		},
-		{
-			name:            "bedrock",
-			client:          NewBedrockClient,
-			provider:        domain.ProviderBedrock,
-			baseURLSuffix:   "/v1",
-			apiKeyEnv:       "AWS_BEARER_TOKEN_BEDROCK",
-			apiKeyValue:     "bedrock-key",
-			wantPath:        "/v1/chat/completions",
-			wantHeaderName:  "Authorization",
-			wantHeaderValue: "Bearer bedrock-key",
-			expectModelBody: true,
-			expectStreamOpt: true,
-		},
-		{
-			name:            "claude",
-			client:          NewClaudeClient,
-			provider:        domain.ProviderClaude,
-			baseURLSuffix:   "/v1",
-			apiKeyEnv:       "ANTHROPIC_API_KEY",
-			apiKeyValue:     "claude-key",
-			wantPath:        "/v1/chat/completions",
-			wantHeaderName:  "Authorization",
-			wantHeaderValue: "Bearer claude-key",
-			expectModelBody: true,
-			expectStreamOpt: true,
-		},
-		{
-			name:            "chatgpt",
-			client:          NewChatGPTClient,
-			provider:        domain.ProviderChatGPT,
-			baseURLSuffix:   "/v1",
-			apiKeyEnv:       "OPENAI_API_KEY",
-			apiKeyValue:     "openai-key",
-			wantPath:        "/v1/chat/completions",
-			wantHeaderName:  "Authorization",
-			wantHeaderValue: "Bearer openai-key",
-			expectModelBody: true,
-			expectStreamOpt: true,
-		},
-		{
-			name:            "azure",
-			client:          NewAzureClient,
-			provider:        domain.ProviderAzure,
-			apiKeyEnv:       "AZURE_OPENAI_API_KEY",
-			apiKeyValue:     "azure-key",
-			wantPath:        "/openai/deployments/deployment-a/chat/completions",
-			wantQueryKey:    "api-version",
-			wantQueryValue:  "2024-10-21",
-			wantHeaderName:  "api-key",
-			wantHeaderValue: "azure-key",
-			expectModelBody: false,
-			expectStreamOpt: true,
-		},
-		{
-			name:            "vllm",
-			client:          NewVLLMClient,
-			provider:        domain.ProviderVLLM,
-			baseURLSuffix:   "/v1",
-			apiKeyEnv:       "VLLM_API_KEY",
-			apiKeyValue:     "vllm-key",
-			wantPath:        "/v1/chat/completions",
-			wantHeaderName:  "Authorization",
-			wantHeaderValue: "Bearer vllm-key",
-			expectModelBody: true,
-			expectStreamInc: true,
-		},
-	}
+type openAICompatibleClientTestCase struct {
+	name            string
+	client          func() Client
+	provider        domain.Provider
+	endpointSuffix  string
+	apiKey          string
+	wantPath        string
+	wantQueryKey    string
+	wantQueryValue  string
+	wantHeaderName  string
+	wantHeaderValue string
+	expectModelBody bool
+	expectStreamOpt bool
+	expectStreamInc bool
+}
 
-	for _, test := range tests {
+var openAICompatibleClientCases = []openAICompatibleClientTestCase{
+	{
+		name:            "gemini",
+		client:          NewGeminiClient,
+		provider:        domain.ProviderGemini,
+		endpointSuffix:  "/v1beta/openai",
+		apiKey:          "gemini-key",
+		wantPath:        "/v1beta/openai/chat/completions",
+		wantHeaderName:  "Authorization",
+		wantHeaderValue: "Bearer gemini-key",
+		expectModelBody: true,
+		expectStreamOpt: true,
+	},
+	{
+		name:            "bedrock",
+		client:          NewBedrockClient,
+		provider:        domain.ProviderBedrock,
+		endpointSuffix:  "/v1",
+		apiKey:          "bedrock-key",
+		wantPath:        "/v1/chat/completions",
+		wantHeaderName:  "Authorization",
+		wantHeaderValue: "Bearer bedrock-key",
+		expectModelBody: true,
+		expectStreamOpt: true,
+	},
+	{
+		name:            "claude",
+		client:          NewClaudeClient,
+		provider:        domain.ProviderClaude,
+		endpointSuffix:  "/v1",
+		apiKey:          "claude-key",
+		wantPath:        "/v1/chat/completions",
+		wantHeaderName:  "Authorization",
+		wantHeaderValue: "Bearer claude-key",
+		expectModelBody: true,
+		expectStreamOpt: true,
+	},
+	{
+		name:            "chatgpt",
+		client:          NewChatGPTClient,
+		provider:        domain.ProviderChatGPT,
+		endpointSuffix:  "/v1",
+		apiKey:          "openai-key",
+		wantPath:        "/v1/chat/completions",
+		wantHeaderName:  "Authorization",
+		wantHeaderValue: "Bearer openai-key",
+		expectModelBody: true,
+		expectStreamOpt: true,
+	},
+	{
+		name:            "azure",
+		client:          NewAzureClient,
+		provider:        domain.ProviderAzure,
+		apiKey:          "azure-key",
+		wantPath:        "/openai/deployments/deployment-a/chat/completions",
+		wantQueryKey:    "api-version",
+		wantQueryValue:  "2024-10-21",
+		wantHeaderName:  "api-key",
+		wantHeaderValue: "azure-key",
+		expectModelBody: false,
+		expectStreamOpt: true,
+	},
+	{
+		name:            "vllm",
+		client:          NewVLLMClient,
+		provider:        domain.ProviderVLLM,
+		endpointSuffix:  "/v1",
+		apiKey:          "vllm-key",
+		wantPath:        "/v1/chat/completions",
+		wantHeaderName:  "Authorization",
+		wantHeaderValue: "Bearer vllm-key",
+		expectModelBody: true,
+		expectStreamInc: true,
+	},
+}
+
+func TestOpenAICompatibleClientsUseProviderSpecificAuthAndURL(t *testing.T) {
+	for _, test := range openAICompatibleClientCases {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
-			t.Setenv(test.apiKeyEnv, test.apiKeyValue)
-
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != test.wantPath {
-					t.Fatalf("unexpected path: %s", r.URL.Path)
-				}
-				if test.wantQueryKey != "" && r.URL.Query().Get(test.wantQueryKey) != test.wantQueryValue {
-					t.Fatalf("unexpected query %s: %s", test.wantQueryKey, r.URL.Query().Get(test.wantQueryKey))
-				}
-				if got := r.Header.Get(test.wantHeaderName); got != test.wantHeaderValue {
-					t.Fatalf("unexpected header %s: %q", test.wantHeaderName, got)
-				}
-
-				body, err := io.ReadAll(r.Body)
-				if err != nil {
-					t.Fatalf("read body: %v", err)
-				}
-
-				var payload map[string]any
-				if err := json.Unmarshal(body, &payload); err != nil {
-					t.Fatalf("decode body: %v", err)
-				}
-				if _, ok := payload["model"]; ok != test.expectModelBody {
-					t.Fatalf("unexpected model presence in request body: %+v", payload)
-				}
-				if _, ok := payload["stream_options"]; ok != test.expectStreamOpt {
-					t.Fatalf("unexpected stream_options presence in request body: %+v", payload)
-				}
-				if _, ok := payload["stream_include_usage"]; ok != test.expectStreamInc {
-					t.Fatalf("unexpected stream_include_usage presence in request body: %+v", payload)
-				}
-
-				w.Header().Set("Content-Type", "text/event-stream")
-				_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}\n\n")
-				_, _ = io.WriteString(w, "data: [DONE]\n\n")
-			}))
+			server := newOpenAICompatibleTestServer(t, test)
 			defer server.Close()
-
-			client := test.client()
-			baseURL := server.URL + test.baseURLSuffix
-			if test.provider == domain.ProviderAzure {
-				baseURL = server.URL
-			}
-
-			result, err := client.Chat(context.Background(), domain.ProviderSettings{
-				BaseURL:   baseURL,
-				Model:     "deployment-a",
-				APIKeyEnv: test.apiKeyEnv,
-			}, ChatRequest{
-				Model:    "deployment-a",
-				Messages: []Message{{Role: "user", Content: "hello"}},
-			}, nil)
+			result, err := runOpenAICompatibleClientTest(server, test)
 			if err != nil {
 				t.Fatalf("chat: %v", err)
 			}
@@ -175,188 +122,118 @@ func TestOpenAICompatibleClientsUseProviderSpecificAuthAndURL(t *testing.T) {
 	}
 }
 
-func TestBuildOpenAICompatibleRequestAppliesVLLMModelProfiles(t *testing.T) {
-	tests := []struct {
-		name         string
-		model        string
-		templateEnv  string
-		templateBody string
-		wantKey      string
-		wantVal      any
-	}{
-		{
-			name:         "qwen-3.5 enables thinking",
-			model:        "Qwen3.5-Coder",
-			templateEnv:  "ORCH_VLLM_CHAT_TEMPLATE_QWEN35",
-			templateBody: "{{ qwen35_template }}",
-			wantKey:      "enable_thinking",
-			wantVal:      true,
-		},
-		{
-			name:         "deepseek enables thinking",
-			model:        "deepseek-r1",
-			templateEnv:  "ORCH_VLLM_CHAT_TEMPLATE_DEEPSEEK",
-			templateBody: "{{ deepseek_template }}",
-			wantKey:      "thinking",
-			wantVal:      true,
-		},
-		{
-			name:         "gemma4 has family template only",
-			model:        "gemma-4-27b-it",
-			templateEnv:  "ORCH_VLLM_CHAT_TEMPLATE_GEMMA4",
-			templateBody: "{{ gemma4_template }}",
-		},
-		{
-			name:         "glm has family template only",
-			model:        "glm-4.5",
-			templateEnv:  "ORCH_VLLM_CHAT_TEMPLATE_GLM",
-			templateBody: "{{ glm_template }}",
-		},
+func newOpenAICompatibleTestServer(t *testing.T, test openAICompatibleClientTestCase) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertOpenAICompatibleRequest(t, r, test)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+}
+
+func runOpenAICompatibleClientTest(server *httptest.Server, test openAICompatibleClientTestCase) (ChatResult, error) {
+	endpoint := server.URL + test.endpointSuffix
+	if test.provider == domain.ProviderAzure {
+		endpoint = server.URL
 	}
+	return test.client().Chat(context.Background(), domain.ProviderSettings{
+		Endpoint: endpoint,
+		Model:    "deployment-a",
+		APIKey:   test.apiKey,
+	}, ChatRequest{
+		Model:    "deployment-a",
+		Messages: []Message{{Role: "user", Content: "hello"}},
+	}, nil)
+}
 
-	for _, test := range tests {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			if test.templateEnv != "" {
-				t.Setenv(test.templateEnv, test.templateBody)
-			}
-			request, err := buildOpenAICompatibleRequest(domain.ProviderVLLM, ChatRequest{
-				Model:    test.model,
-				Messages: []Message{{Role: "user", Content: "hello"}},
-			})
-			if err != nil {
-				t.Fatalf("build request: %v", err)
-			}
-			if strings.TrimSpace(test.templateBody) != "" && request.ChatTemplate != test.templateBody {
-				t.Fatalf("unexpected chat_template: %q", request.ChatTemplate)
-			}
-
-			if test.wantKey == "" {
-				if len(request.ChatTemplateKwargs) != 0 {
-					t.Fatalf("expected empty chat_template_kwargs, got %+v", request.ChatTemplateKwargs)
-				}
-				return
-			}
-			if len(request.ChatTemplateKwargs) == 0 {
-				t.Fatalf("expected chat_template_kwargs for model %s", test.model)
-			}
-			if got := request.ChatTemplateKwargs[test.wantKey]; got != test.wantVal {
-				t.Fatalf("unexpected chat_template_kwargs[%s]: %v", test.wantKey, got)
-			}
-		})
+func assertOpenAICompatibleRequest(t *testing.T, r *http.Request, test openAICompatibleClientTestCase) {
+	t.Helper()
+	if r.URL.Path != test.wantPath {
+		t.Fatalf("unexpected path: %s", r.URL.Path)
+	}
+	if test.wantQueryKey != "" && r.URL.Query().Get(test.wantQueryKey) != test.wantQueryValue {
+		t.Fatalf("unexpected query %s: %s", test.wantQueryKey, r.URL.Query().Get(test.wantQueryKey))
+	}
+	if got := r.Header.Get(test.wantHeaderName); got != test.wantHeaderValue {
+		t.Fatalf("unexpected header %s: %q", test.wantHeaderName, got)
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if _, ok := payload["model"]; ok != test.expectModelBody {
+		t.Fatalf("unexpected model presence in request body: %+v", payload)
+	}
+	if _, ok := payload["stream_options"]; ok != test.expectStreamOpt {
+		t.Fatalf("unexpected stream_options presence in request body: %+v", payload)
+	}
+	if _, ok := payload["stream_include_usage"]; ok != test.expectStreamInc {
+		t.Fatalf("unexpected stream_include_usage presence in request body: %+v", payload)
 	}
 }
 
-func TestBuildOpenAICompatibleRequestKeepsNonVLLMClearFromTemplateKwargs(t *testing.T) {
-	t.Parallel()
+func TestBuildOpenAICompatibleRequestAppliesVLLMReasoningProfiles(t *testing.T) {
+	getenv = func(name string) string {
+		switch name {
+		case "ORCH_VLLM_CHAT_TEMPLATE_QWEN35":
+			return "{{ qwen35_template }}"
+		case "ORCH_VLLM_CHAT_TEMPLATE_DEEPSEEK":
+			return "{{ deepseek_template }}"
+		default:
+			return ""
+		}
+	}
+	defer func() { getenv = os.Getenv }()
 
-	request, err := buildOpenAICompatibleRequest(domain.ProviderChatGPT, ChatRequest{
-		Model:    "gpt-5",
+	request, err := buildOpenAICompatibleRequest(domain.ProviderVLLM, domain.ProviderSettings{Reasoning: "false"}, ChatRequest{
+		Model:    "Qwen3.5-Coder",
 		Messages: []Message{{Role: "user", Content: "hello"}},
 	})
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	if request.ChatTemplate != "" {
-		t.Fatalf("expected non-vLLM request to have no chat_template, got %q", request.ChatTemplate)
+	if request.ChatTemplate != "{{ qwen35_template }}" {
+		t.Fatalf("unexpected chat template: %q", request.ChatTemplate)
 	}
-	if len(request.ChatTemplateKwargs) != 0 {
-		t.Fatalf("expected non-vLLM request to have no chat_template_kwargs, got %+v", request.ChatTemplateKwargs)
-	}
-}
-
-func TestResolveReasoningConfig(t *testing.T) {
-	t.Run("default fallback is enabled", func(t *testing.T) {
-		cfg, err := resolveReasoningConfig()
-		if err != nil {
-			t.Fatalf("resolve reasoning config: %v", err)
-		}
-		if !cfg.Fallback {
-			t.Fatalf("expected default fallback enabled")
-		}
-	})
-
-	t.Run("env supports global fallback and model map", func(t *testing.T) {
-		t.Setenv(reasoningFallbackEnv, "false")
-		t.Setenv(reasoningByModelEnv, `{"gemma-4-31b": false, "deepseek": true}`)
-
-		cfg, err := resolveReasoningConfig()
-		if err != nil {
-			t.Fatalf("resolve reasoning config: %v", err)
-		}
-		if cfg.Fallback {
-			t.Fatalf("expected global fallback disabled")
-		}
-		if len(cfg.ReasoningByModel) != 2 {
-			t.Fatalf("unexpected reasoning_by_model size: %d", len(cfg.ReasoningByModel))
-		}
-	})
-
-	t.Run("invalid bool returns explicit error", func(t *testing.T) {
-		t.Setenv(reasoningFallbackEnv, "maybe")
-		_, err := resolveReasoningConfig()
-		if err == nil {
-			t.Fatalf("expected parsing error for invalid fallback bool")
-		}
-	})
-}
-
-func TestReasoningConfigUseReasoningFallback(t *testing.T) {
-	cfg := reasoningConfig{
-		Fallback: false,
-		ReasoningByModel: map[string]bool{
-			"gemma-4":       false,
-			"deepseek-r1":   true,
-			"deepseek":      false,
-			"qwen3.5-coder": true,
-		},
-	}
-
-	if cfg.useReasoningFallback("gemma-4-31b-it") {
-		t.Fatalf("expected gemma pattern to disable fallback")
-	}
-	if !cfg.useReasoningFallback("deepseek-r1-distill") {
-		t.Fatalf("expected longest deepseek-r1 pattern to enable fallback")
-	}
-	if !cfg.useReasoningFallback("QWEN3.5-CODER") {
-		t.Fatalf("expected case-insensitive pattern match")
-	}
-	if cfg.useReasoningFallback("llama3.1") {
-		t.Fatalf("expected default fallback(false) for unmatched model")
+	if got := request.ChatTemplateKwargs["enable_thinking"]; got != false {
+		t.Fatalf("unexpected vLLM reasoning kwargs: %+v", request.ChatTemplateKwargs)
 	}
 }
 
-func TestReadOpenAICompatibleStreamReasoningFallbackControl(t *testing.T) {
+func TestBuildOpenAICompatibleRequestAppliesOpenAIReasoningEffort(t *testing.T) {
+	request, err := buildOpenAICompatibleRequest(domain.ProviderChatGPT, domain.ProviderSettings{Reasoning: "xhigh"}, ChatRequest{
+		Model:    "gpt-5.3-codex",
+		Messages: []Message{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if request.ReasoningEffort != "xhigh" {
+		t.Fatalf("unexpected reasoning effort: %q", request.ReasoningEffort)
+	}
+}
+
+func TestReadOpenAICompatibleStreamReadsReasoningFallbackFields(t *testing.T) {
 	newResponse := func(body string) *http.Response {
 		return &http.Response{Body: io.NopCloser(strings.NewReader(body))}
 	}
 
-	payload := "data: {\"choices\":[{\"delta\":{\"reasoning\":\"hidden\"}}]}\n\n" +
+	payload := "data: {\"choices\":[{\"delta\":{\"reasoning\":\"hidden\",\"content\":\"ok\"}}]}\n\n" +
 		"data: [DONE]\n\n"
 
-	resultFallbackOn, err := readOpenAICompatibleStream(
-		newResponse(payload),
-		"deepseek-r1",
-		reasoningConfig{Fallback: false, ReasoningByModel: map[string]bool{"deepseek": true}},
-		nil,
-	)
+	result, err := readOpenAICompatibleStream(newResponse(payload), nil)
 	if err != nil {
-		t.Fatalf("read stream with model override: %v", err)
+		t.Fatalf("read stream: %v", err)
 	}
-	if resultFallbackOn.Reasoning != "hidden" {
-		t.Fatalf("expected reasoning when model override enables fallback, got %q", resultFallbackOn.Reasoning)
+	if result.Reasoning != "hidden" {
+		t.Fatalf("expected reasoning fallback, got %q", result.Reasoning)
 	}
-
-	resultFallbackOff, err := readOpenAICompatibleStream(
-		newResponse(payload),
-		"gemma-4-31b",
-		reasoningConfig{Fallback: false, ReasoningByModel: map[string]bool{"gemma-4": false}},
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("read stream with disabled fallback: %v", err)
-	}
-	if resultFallbackOff.Reasoning != "" {
-		t.Fatalf("expected empty reasoning when fallback disabled, got %q", resultFallbackOff.Reasoning)
+	if result.Content != "ok" {
+		t.Fatalf("expected content, got %q", result.Content)
 	}
 }

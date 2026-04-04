@@ -78,11 +78,11 @@ func New(service *orchestrator.Service) Model {
 		snapshot:            service.Snapshot(),
 		showThinking:        true,
 		followOutput:        true,
-		settings:            newSettingsModalFromResolved(service.ConfigState()),
+		settings:            newSettingsModalFromState(service.ConfigState()),
 	}
 	model.eventCh, model.eventCancel = service.SubscribeEvents()
 	if model.needsSettingsConfiguration() {
-		model.settings = newSetupSettingsModalFromResolved(service.ConfigState())
+		model.settings = newSetupSettingsModalFromState(service.ConfigState())
 		model.statusMessage = "Configure a provider and model to start the first run."
 	}
 	model.syncChatViewport(true)
@@ -116,52 +116,20 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = message.Width
-		m.height = message.Height
-		m.input.Width = max(8, message.Width-18)
-		m.settings.resize(max(20, m.viewportWidth()-24))
-		m.syncChatViewport(m.followOutput || m.body.AtBottom())
-		return m, nil
+		return m.handleWindowResize(message)
 	case serviceUpdateMsg:
-		stickToBottom := m.followOutput || m.body.AtBottom()
-		m.snapshot = m.service.Snapshot()
-		if strings.TrimSpace(message.event.Message) != "" {
-			m.statusMessage = message.event.Message
-		}
-		m.syncChatViewport(stickToBottom)
-		return m, waitForServiceUpdate(m.eventCh)
+		return m.handleServiceUpdate(message)
 	case operationErrMsg:
-		if message.err != nil {
-			m.statusMessage = message.err.Error()
-		}
-		return m, nil
+		return m.handleOperationError(message)
 	case exitCompletedMsg:
 		return m, tea.Quit
 	case ollamaDiscoveryMsg:
 		m.updateOllamaDiscovery(message)
 		return m, nil
 	case tea.KeyMsg:
-		if m.snapshot.PendingApproval != nil {
-			return m.updateApproval(message)
-		}
-		if m.showExitConfirm {
-			return m.updateExitConfirm(message)
-		}
-		if m.showHistoryPicker {
-			return m.updateHistoryPicker(message)
-		}
-		if m.showInfoModal {
-			return m.updateInfoModal(message)
-		}
-		if m.settings.visible {
-			return m.updateSettings(message)
-		}
-		return m.updateDashboard(message)
+		return m.routeKeyMessage(message)
 	case tea.MouseMsg:
-		if m.snapshot.PendingApproval != nil || m.showExitConfirm || m.settings.visible {
-			return m, nil
-		}
-		return m.updateDashboard(message)
+		return m.routeMouseMessage(message)
 	default:
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
@@ -169,145 +137,222 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) handleWindowResize(message tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+	m.width = message.Width
+	m.height = message.Height
+	m.input.Width = max(8, message.Width-18)
+	m.settings.resize(max(20, m.viewportWidth()-24))
+	m.syncChatViewport(m.followOutput || m.body.AtBottom())
+	return m, nil
+}
+
+func (m Model) handleServiceUpdate(message serviceUpdateMsg) (tea.Model, tea.Cmd) {
+	stickToBottom := m.followOutput || m.body.AtBottom()
+	m.snapshot = m.service.Snapshot()
+	if strings.TrimSpace(message.event.Message) != "" {
+		m.statusMessage = message.event.Message
+	}
+	m.syncChatViewport(stickToBottom)
+	return m, waitForServiceUpdate(m.eventCh)
+}
+
+func (m Model) handleOperationError(message operationErrMsg) (tea.Model, tea.Cmd) {
+	if message.err != nil {
+		m.statusMessage = message.err.Error()
+	}
+	return m, nil
+}
+
+func (m Model) routeKeyMessage(message tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case m.snapshot.PendingApproval != nil:
+		return m.updateApproval(message)
+	case m.showExitConfirm:
+		return m.updateExitConfirm(message)
+	case m.showHistoryPicker:
+		return m.updateHistoryPicker(message)
+	case m.showInfoModal:
+		return m.updateInfoModal(message)
+	case m.settings.visible:
+		return m.updateSettings(message)
+	default:
+		return m.updateDashboard(message)
+	}
+}
+
+func (m Model) routeMouseMessage(message tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.snapshot.PendingApproval != nil || m.showExitConfirm || m.settings.visible {
+		return m, nil
+	}
+	return m.updateDashboard(message)
+}
+
 func (m Model) updateDashboard(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := msg.(type) {
 	case tea.KeyMsg:
-		switch message.String() {
-		case "ctrl+c":
-			return m, tea.Quit
-		case "ctrl+s":
-			m.openSettings()
-			return m, nil
-		case "ctrl+t":
-			stickToBottom := m.followOutput || m.body.AtBottom()
-			m.showThinking = !m.showThinking
-			if m.showThinking {
-				m.statusMessage = "Thinking expanded."
-			} else {
-				m.statusMessage = "Thinking collapsed."
-			}
-			m.syncChatViewport(stickToBottom)
-			return m, nil
-		case "pgup":
-			m.body.PageUp()
-			m.followOutput = m.body.AtBottom()
-			return m, nil
-		case "pgdown":
-			m.body.PageDown()
-			m.followOutput = m.body.AtBottom()
-			return m, nil
-		case "home":
-			m.body.GotoTop()
-			m.followOutput = false
-			return m, nil
-		case "end":
-			m.body.GotoBottom()
-			m.followOutput = true
-			return m, nil
-		case "up":
-			if m.slashMenuVisible() {
-				m.moveSlashMenu(-1)
-				return m, nil
-			}
-			m.applyHistory(-1)
-			return m, nil
-		case "down":
-			if m.slashMenuVisible() {
-				m.moveSlashMenu(1)
-				return m, nil
-			}
-			m.applyHistory(1)
-			return m, nil
-		case "tab":
-			if m.slashMenuVisible() {
-				m.applySlashMenuSelection()
-				return m, nil
-			}
-		case "shift+tab":
-			if m.composerMode == domain.RunModeReact {
-				m.composerMode = domain.RunModePlan
-				m.statusMessage = "Plan mode enabled."
-			} else {
-				m.composerMode = domain.RunModeReact
-				m.statusMessage = "Plan mode disabled."
-			}
-			return m, nil
-		case "enter":
-			value := strings.TrimSpace(m.input.Value())
-			if m.slashMenuVisible() {
-				selected := m.selectedSlashCommand()
-				if selected.value != "" && value != selected.value {
-					m.applySlashMenuSelection()
-					return m, nil
-				}
-			}
-			command := parseDashboardCommand(value)
-			if command.kind == commandExit {
-				if m.service != nil && m.service.ActiveRunCount() > 0 {
-					m.showExitConfirm = true
-					m.statusMessage = "An active run is still in progress. Enter will cancel it and quit."
-					return m, nil
-				}
-				return m, tea.Quit
-			}
-			if command.kind == commandClear {
-				m.input.SetValue("")
-				m.messageHistoryIndex = -1
-				m.messageHistoryDraft = ""
-				return m, clearSessionCmd(m.service)
-			}
-			if command.kind == commandCompact {
-				m.input.SetValue("")
-				m.messageHistoryIndex = -1
-				m.messageHistoryDraft = ""
-				return m, compactSessionCmd(m.service)
-			}
-			if command.kind == commandStatus {
-				m.input.SetValue("")
-				m.messageHistoryIndex = -1
-				m.messageHistoryDraft = ""
-				m.openStatusInfo()
-				return m, nil
-			}
-			if command.kind == commandContext {
-				m.input.SetValue("")
-				m.messageHistoryIndex = -1
-				m.messageHistoryDraft = ""
-				m.openContextInfo()
-				return m, nil
-			}
-			if command.kind == commandTasks {
-				m.input.SetValue("")
-				m.messageHistoryIndex = -1
-				m.messageHistoryDraft = ""
-				m.openTasksInfo(command.arg)
-				return m, nil
-			}
-			if value == "" {
-				return m, nil
-			}
-			m.input.SetValue("")
-			m.messageHistoryIndex = -1
-			m.messageHistoryDraft = ""
-			m.followOutput = true
-			return m, submitPromptCmd(m.service, value, m.composerMode)
-		}
-
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(message)
-		m.refreshSlashMenu()
-		return m, cmd
+		return m.handleDashboardKey(message)
 	case tea.MouseMsg:
-		previousOffset := m.body.YOffset
-		var cmd tea.Cmd
-		m.body, cmd = m.body.Update(message)
-		if m.body.YOffset != previousOffset {
-			m.followOutput = m.body.AtBottom()
-		}
-		return m, cmd
+		return m.handleDashboardMouse(message)
 	default:
 		return m, nil
 	}
+}
+
+func (m Model) handleDashboardKey(message tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch message.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	default:
+		if handled, nextModel, cmd := m.handleDashboardControlKey(message.String()); handled {
+			return nextModel, cmd
+		}
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(message)
+	m.refreshSlashMenu()
+	return m, cmd
+}
+
+func (m Model) handleDashboardControlKey(key string) (bool, tea.Model, tea.Cmd) {
+	switch key {
+	case "ctrl+s":
+		m.openSettings()
+		return true, m, nil
+	case "ctrl+t":
+		m.toggleThinkingVisibility()
+		return true, m, nil
+	case "pgup":
+		m.body.PageUp()
+		m.followOutput = m.body.AtBottom()
+		return true, m, nil
+	case "pgdown":
+		m.body.PageDown()
+		m.followOutput = m.body.AtBottom()
+		return true, m, nil
+	case "home":
+		m.body.GotoTop()
+		m.followOutput = false
+		return true, m, nil
+	case "end":
+		m.body.GotoBottom()
+		m.followOutput = true
+		return true, m, nil
+	case "up":
+		return true, m.handleDashboardVerticalMove(-1), nil
+	case "down":
+		return true, m.handleDashboardVerticalMove(1), nil
+	case "tab":
+		if m.slashMenuVisible() {
+			m.applySlashMenuSelection()
+			return true, m, nil
+		}
+	case "shift+tab":
+		m.toggleComposerMode()
+		return true, m, nil
+	case "enter":
+		nextModel, cmd := m.handleDashboardEnter()
+		return true, nextModel, cmd
+	}
+	return false, m, nil
+}
+
+func (m Model) handleDashboardMouse(message tea.MouseMsg) (tea.Model, tea.Cmd) {
+	previousOffset := m.body.YOffset
+	var cmd tea.Cmd
+	m.body, cmd = m.body.Update(message)
+	if m.body.YOffset != previousOffset {
+		m.followOutput = m.body.AtBottom()
+	}
+	return m, cmd
+}
+
+func (m *Model) toggleThinkingVisibility() {
+	stickToBottom := m.followOutput || m.body.AtBottom()
+	m.showThinking = !m.showThinking
+	if m.showThinking {
+		m.statusMessage = "Thinking expanded."
+	} else {
+		m.statusMessage = "Thinking collapsed."
+	}
+	m.syncChatViewport(stickToBottom)
+}
+
+func (m Model) handleDashboardVerticalMove(delta int) tea.Model {
+	if m.slashMenuVisible() {
+		m.moveSlashMenu(delta)
+		return m
+	}
+	m.applyHistory(delta)
+	return m
+}
+
+func (m *Model) toggleComposerMode() {
+	if m.composerMode == domain.RunModeReact {
+		m.composerMode = domain.RunModePlan
+		m.statusMessage = "Plan mode enabled."
+		return
+	}
+	m.composerMode = domain.RunModeReact
+	m.statusMessage = "Plan mode disabled."
+}
+
+func (m *Model) handleDashboardEnter() (tea.Model, tea.Cmd) {
+	value := strings.TrimSpace(m.input.Value())
+	if m.slashMenuVisible() {
+		selected := m.selectedSlashCommand()
+		if selected.value != "" && value != selected.value {
+			m.applySlashMenuSelection()
+			return *m, nil
+		}
+	}
+	command := parseDashboardCommand(value)
+	if handled, cmd := m.handleDashboardCommand(command); handled {
+		return *m, cmd
+	}
+	if value == "" {
+		return *m, nil
+	}
+	m.resetDashboardInput()
+	m.followOutput = true
+	return *m, submitPromptCmd(m.service, value, m.composerMode)
+}
+
+func (m *Model) handleDashboardCommand(command dashboardCommand) (bool, tea.Cmd) {
+	switch command.kind {
+	case commandExit:
+		if m.service != nil && m.service.ActiveRunCount() > 0 {
+			m.showExitConfirm = true
+			m.statusMessage = "An active run is still in progress. Enter will cancel it and quit."
+			return true, nil
+		}
+		return true, tea.Quit
+	case commandClear:
+		m.resetDashboardInput()
+		return true, clearSessionCmd(m.service)
+	case commandCompact:
+		m.resetDashboardInput()
+		return true, compactSessionCmd(m.service)
+	case commandStatus:
+		m.resetDashboardInput()
+		m.openStatusInfo()
+		return true, nil
+	case commandContext:
+		m.resetDashboardInput()
+		m.openContextInfo()
+		return true, nil
+	case commandTasks:
+		m.resetDashboardInput()
+		m.openTasksInfo(command.arg)
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func (m *Model) resetDashboardInput() {
+	m.input.SetValue("")
+	m.messageHistoryIndex = -1
+	m.messageHistoryDraft = ""
 }
 
 func (m *Model) refreshSlashMenu() {

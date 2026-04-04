@@ -79,7 +79,9 @@ func (m *Manager) AppendChatHistory(entry ChatHistoryEntry) error {
 	if err != nil {
 		return fmt.Errorf("open chat history: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	if _, err := file.WriteString(formatChatHistoryEntry(createdAt, entry.SessionID, entry.RunID, entry.Speaker, summary, pointer)); err != nil {
 		return fmt.Errorf("append chat history: %w", err)

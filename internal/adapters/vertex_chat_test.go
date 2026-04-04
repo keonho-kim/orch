@@ -61,8 +61,6 @@ func TestBuildVertexRequestMapsMessagesAndTools(t *testing.T) {
 }
 
 func TestVertexClientStreamsTextToolCallsAndUsage(t *testing.T) {
-	t.Setenv("GOOGLE_API_KEY", "google-key")
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/publishers/google/models/gemini-2.5-pro:streamGenerateContent" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -85,9 +83,9 @@ func TestVertexClientStreamsTextToolCallsAndUsage(t *testing.T) {
 
 	client := NewVertexClient()
 	result, err := client.Chat(context.Background(), domain.ProviderSettings{
-		BaseURL:   server.URL + "/v1",
-		Model:     "gemini-2.5-pro",
-		APIKeyEnv: "GOOGLE_API_KEY",
+		Endpoint: server.URL + "/v1",
+		Model:    "gemini-2.5-pro",
+		APIKey:   "google-key",
 	}, ChatRequest{
 		Model: "gemini-2.5-pro",
 		Messages: []Message{

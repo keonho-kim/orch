@@ -30,114 +30,102 @@ type iterationInputs struct {
 	inheritedContext   session.Context
 }
 
+type runExecution struct {
+	record           domain.RunRecord
+	client           adapters.Client
+	snapshot         Snapshot
+	providerSettings domain.ProviderSettings
+	messages         []adapters.Message
+	limit            int
+}
+
 func (s *Service) executeRun(ctx context.Context, runID string) {
-	record, ok := s.RunRecord(runID)
-	if !ok {
-		return
-	}
-
-	client, ok := s.clients[record.Provider]
-	if !ok {
-		_ = s.failRun(runID, fmt.Errorf("provider %s is not configured", record.Provider))
-		return
-	}
-
-	snapshot := s.Snapshot()
-	providerSettings := snapshot.Settings.ConfigFor(record.Provider)
-	preparedPrompt, err := s.preprocessPrompt(ctx, runID, record, snapshot.Settings)
+	execution, ok, err := s.prepareRunExecution(runID)
 	if err != nil {
 		_ = s.failRun(runID, err)
 		return
 	}
-	sessionMessages, err := s.sessionContextMessages()
-	if err != nil {
-		_ = s.failRun(runID, err)
+	if !ok {
 		return
 	}
-	messages := append([]adapters.Message{}, sessionMessages...)
-	messages = append(messages, adapters.Message{Role: "user", Content: preparedPrompt})
 
-	limit := ralphLimit(snapshot.Settings, record.Mode)
-	for iteration := 1; iteration <= limit; iteration++ {
-		if err := s.setRunIteration(runID, iteration); err != nil {
-			return
-		}
-		if err := s.updateRunTask(runID, fmt.Sprintf("Ralph %d/%d", iteration, limit)); err != nil {
-			return
-		}
-
-		state, ok := s.state(runID)
-		if !ok {
-			return
-		}
-
-		inputs, err := s.loadIterationInputs(state.record, state.selectedSkills, state.resolvedRefs, snapshot.ActivePlan, strings.TrimSpace(state.draft))
-		if err != nil {
-			_ = s.failRun(runID, err)
-			return
-		}
-		contextMessage := inputs.prompt()
-		if err := s.appendSessionContextSnapshot(runID, inputs.snapshot()); err != nil {
-			_ = s.failRun(runID, err)
-			return
-		}
-		systemPrompt, err := s.buildSystemPrompt(state.record)
-		if err != nil {
-			_ = s.failRun(runID, err)
-			return
-		}
-
-		result, err := client.Chat(ctx, providerSettings, adapters.ChatRequest{
-			Model: record.Model,
-			Messages: append([]adapters.Message{
-				{Role: "system", Content: systemPrompt},
-				{Role: "system", Content: contextMessage},
-			}, messages...),
-			Tools: adapters.ToolCatalog(record.Mode, record.AgentRole),
-		}, func(delta adapters.Delta) error {
-			if delta.Reasoning != "" {
-				if err := s.appendThinking(runID, delta.Reasoning); err != nil {
-					return err
-				}
-			}
-			if delta.Content != "" {
-				if err := s.appendOutput(runID, delta.Content); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			if ctx.Err() != nil {
-				_ = s.cancelRun(runID, ctx.Err())
-				return
-			}
-			_ = s.failRun(runID, err)
-			return
-		}
-
-		s.setRunDraft(runID, result.Content)
-		if err := s.appendSessionAssistant(runID, result); err != nil {
-			_ = s.failRun(runID, err)
-			return
-		}
-		messages = append(messages, adapters.ToAssistantMessage(result))
-		if len(result.ToolCalls) == 0 {
-			_ = s.completeRun(runID)
-			return
-		}
-		terminated, err := s.executeToolCalls(ctx, runID, snapshot.Settings, result.ToolCalls, &messages)
-		if err != nil {
-			_ = s.failRun(runID, err)
-			return
-		}
+	for iteration := 1; iteration <= execution.limit; iteration++ {
+		nextExecution, terminated := s.runIteration(ctx, runID, execution, iteration)
 		if terminated {
 			return
 		}
-		snapshot = s.Snapshot()
+		execution = nextExecution
 	}
 
-	_ = s.failRun(runID, fmt.Errorf("ralph iteration limit reached (%d)", limit))
+	_ = s.failRun(runID, fmt.Errorf("ralph iteration limit reached (%d)", execution.limit))
+}
+
+func (s *Service) runIteration(ctx context.Context, runID string, execution runExecution, iteration int) (runExecution, bool) {
+	if err := s.beginIteration(runID, iteration, execution.limit); err != nil {
+		return execution, true
+	}
+	state, ok := s.state(runID)
+	if !ok {
+		return execution, true
+	}
+	result, ok := s.requestIterationResult(ctx, runID, execution, state)
+	if !ok {
+		return execution, true
+	}
+	return s.finishIteration(ctx, runID, execution, result)
+}
+
+func (s *Service) beginIteration(runID string, iteration int, limit int) error {
+	if err := s.setRunIteration(runID, iteration); err != nil {
+		return err
+	}
+	return s.updateRunTask(runID, fmt.Sprintf("Ralph %d/%d", iteration, limit))
+}
+
+func (s *Service) requestIterationResult(ctx context.Context, runID string, execution runExecution, state *runState) (adapters.ChatResult, bool) {
+	inputs, err := s.loadIterationInputs(state.record, state.selectedSkills, state.resolvedRefs, execution.snapshot.ActivePlan, strings.TrimSpace(state.draft))
+	if err != nil {
+		_ = s.failRun(runID, err)
+		return adapters.ChatResult{}, false
+	}
+	contextMessage := inputs.prompt()
+	if err := s.appendSessionContextSnapshot(runID, inputs.snapshot()); err != nil {
+		_ = s.failRun(runID, err)
+		return adapters.ChatResult{}, false
+	}
+	result, err := s.executeIterationChat(ctx, runID, execution, contextMessage)
+	if err != nil {
+		if ctx.Err() != nil {
+			_ = s.cancelRun(runID, ctx.Err())
+			return adapters.ChatResult{}, false
+		}
+		_ = s.failRun(runID, err)
+		return adapters.ChatResult{}, false
+	}
+	return result, true
+}
+
+func (s *Service) finishIteration(ctx context.Context, runID string, execution runExecution, result adapters.ChatResult) (runExecution, bool) {
+	s.setRunDraft(runID, result.Content)
+	if err := s.appendSessionAssistant(runID, result); err != nil {
+		_ = s.failRun(runID, err)
+		return execution, true
+	}
+	execution.messages = append(execution.messages, adapters.ToAssistantMessage(result))
+	if len(result.ToolCalls) == 0 {
+		_ = s.completeRun(runID)
+		return execution, true
+	}
+	terminated, err := s.executeToolCalls(ctx, runID, execution.snapshot.Settings, result.ToolCalls, &execution.messages)
+	if err != nil {
+		_ = s.failRun(runID, err)
+		return execution, true
+	}
+	if terminated {
+		return execution, true
+	}
+	execution.snapshot = s.Snapshot()
+	return execution, false
 }
 
 func (s *Service) executeToolCalls(
@@ -289,23 +277,8 @@ func (s *Service) recordToolExecution(
 		return false, err
 	}
 	record, ok := s.RunRecord(runID)
-	if ok && record.AgentRole == domain.AgentRoleWorker && (execution.TerminalStatus != "" || hasStructuredTaskOutcome(execution)) {
-		status := ""
-		switch execution.TerminalStatus {
-		case domain.StatusCompleted:
-			status = domain.TaskStatusCompleted
-		case domain.StatusFailed:
-			status = domain.TaskStatusFailed
-		}
-		if err := s.updateCurrentSessionTaskMetadata(
-			status,
-			execution.TaskSummary,
-			execution.TaskChangedPaths,
-			execution.TaskChecksRun,
-			execution.TaskEvidencePointers,
-			execution.TaskFollowups,
-			execution.TaskErrorKind,
-		); err != nil {
+	if ok {
+		if err := s.updateRunTaskOutcome(record, execution); err != nil {
 			return false, err
 		}
 	}
@@ -314,17 +287,108 @@ func (s *Service) recordToolExecution(
 	case domain.StatusCompleted:
 		return true, s.completeRun(runID)
 	case domain.StatusFailed:
-		message := execution.TerminalMessage
-		if strings.TrimSpace(message) == "" {
-			message = execution.Output
-		}
-		if strings.TrimSpace(message) == "" {
-			message = "worker task failed"
-		}
-		return true, s.failRun(runID, fmt.Errorf("%s", message))
+		return true, s.failRun(runID, executionFailure(execution))
 	default:
 		return false, nil
 	}
+}
+
+func (s *Service) prepareRunExecution(runID string) (runExecution, bool, error) {
+	record, ok := s.RunRecord(runID)
+	if !ok {
+		return runExecution{}, false, nil
+	}
+	client, ok := s.clients[record.Provider]
+	if !ok {
+		return runExecution{}, true, fmt.Errorf("provider %s is not configured", record.Provider)
+	}
+	snapshot := s.Snapshot()
+	sessionMessages, err := s.sessionContextMessages()
+	if err != nil {
+		return runExecution{}, true, err
+	}
+	return runExecution{
+		record:           record,
+		client:           client,
+		snapshot:         snapshot,
+		providerSettings: snapshot.Settings.ConfigFor(record.Provider),
+		messages:         append(sessionMessages, adapters.Message{Role: "user", Content: record.Prompt}),
+		limit:            ralphLimit(snapshot.Settings, record.Mode),
+	}, true, nil
+}
+
+func (s *Service) executeIterationChat(
+	ctx context.Context,
+	runID string,
+	execution runExecution,
+	contextMessage string,
+) (adapters.ChatResult, error) {
+	systemPrompt, err := s.buildSystemPrompt(execution.record)
+	if err != nil {
+		return adapters.ChatResult{}, err
+	}
+	request := adapters.ChatRequest{
+		Model: execution.record.Model,
+		Messages: append([]adapters.Message{
+			{Role: "system", Content: systemPrompt},
+			{Role: "system", Content: contextMessage},
+		}, execution.messages...),
+		Tools: adapters.ToolCatalog(execution.record.Mode, execution.record.AgentRole),
+	}
+	return execution.client.Chat(ctx, execution.providerSettings, request, s.streamRunDelta(runID))
+}
+
+func (s *Service) streamRunDelta(runID string) adapters.DeltaHandler {
+	return func(delta adapters.Delta) error {
+		if delta.Reasoning != "" {
+			if err := s.appendThinking(runID, delta.Reasoning); err != nil {
+				return err
+			}
+		}
+		if delta.Content != "" {
+			if err := s.appendOutput(runID, delta.Content); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+func (s *Service) updateRunTaskOutcome(record domain.RunRecord, execution tooling.Execution) error {
+	if record.AgentRole != domain.AgentRoleWorker || (execution.TerminalStatus == "" && !hasStructuredTaskOutcome(execution)) {
+		return nil
+	}
+	return s.updateCurrentSessionTaskMetadata(
+		taskStatusFromRunStatus(execution.TerminalStatus),
+		execution.TaskSummary,
+		execution.TaskChangedPaths,
+		execution.TaskChecksRun,
+		execution.TaskEvidencePointers,
+		execution.TaskFollowups,
+		execution.TaskErrorKind,
+	)
+}
+
+func taskStatusFromRunStatus(status domain.RunStatus) string {
+	switch status {
+	case domain.StatusCompleted:
+		return domain.TaskStatusCompleted
+	case domain.StatusFailed:
+		return domain.TaskStatusFailed
+	default:
+		return ""
+	}
+}
+
+func executionFailure(execution tooling.Execution) error {
+	message := strings.TrimSpace(execution.TerminalMessage)
+	if message == "" {
+		message = strings.TrimSpace(execution.Output)
+	}
+	if message == "" {
+		message = "worker task failed"
+	}
+	return fmt.Errorf("%s", message)
 }
 
 func (s *Service) awaitApproval(ctx context.Context, runID string, call domain.ToolCall, reason string) (bool, error) {

@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -49,7 +48,10 @@ func (ollamaClient) Provider() domain.Provider {
 
 func (ollamaClient) Chat(ctx context.Context, settings domain.ProviderSettings, request ChatRequest, onDelta DeltaHandler) (ChatResult, error) {
 	request.Stream = true
-	think := ollamaThinkProfile(request.Model)
+	think, err := ollamaThinkProfile(request.Model, settings.Reasoning)
+	if err != nil {
+		return ChatResult{}, err
+	}
 	body, err := json.Marshal(ollamaChatRequest{
 		Model:    request.Model,
 		Messages: request.Messages,
@@ -61,7 +63,7 @@ func (ollamaClient) Chat(ctx context.Context, settings domain.ProviderSettings, 
 		return ChatResult{}, fmt.Errorf("marshal ollama chat request: %w", err)
 	}
 
-	chatURL, err := ollamaChatURL(settings.NormalizedBaseURL())
+	chatURL, err := ollamaChatURL(settings.NormalizedEndpoint())
 	if err != nil {
 		return ChatResult{}, err
 	}
@@ -71,12 +73,17 @@ func (ollamaClient) Chat(ctx context.Context, settings domain.ProviderSettings, 
 		return ChatResult{}, fmt.Errorf("build ollama chat request: %w", err)
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
+	if apiKey := strings.TrimSpace(settings.APIKey); apiKey != "" {
+		httpRequest.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 
 	response, err := http.DefaultClient.Do(httpRequest)
 	if err != nil {
 		return ChatResult{}, fmt.Errorf("send ollama chat request: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		data, _ := io.ReadAll(response.Body)
@@ -86,21 +93,35 @@ func (ollamaClient) Chat(ctx context.Context, settings domain.ProviderSettings, 
 	return readOllamaStream(response, onDelta)
 }
 
-func ollamaThinkProfile(model string) any {
+func ollamaThinkProfile(model string, reasoning string) (any, error) {
+	switch strings.ToLower(strings.TrimSpace(reasoning)) {
+	case "":
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	case "low", "medium", "high":
+		return strings.ToLower(strings.TrimSpace(reasoning)), nil
+	case "xhigh":
+		return nil, fmt.Errorf("ollama does not support xhigh reasoning")
+	default:
+		return nil, fmt.Errorf("unsupported Ollama reasoning value %q", reasoning)
+	}
+
 	normalized := strings.ToLower(strings.TrimSpace(model))
 	switch {
 	case strings.Contains(normalized, "qwen") && (strings.Contains(normalized, "3.5") || strings.Contains(normalized, "35")):
-		return true
+		return true, nil
 	case strings.Contains(normalized, "deepseek"):
-		return true
+		return true, nil
 	case strings.Contains(normalized, "gemma-4"),
 		strings.Contains(normalized, "gemma4"):
-		return true
+		return true, nil
 	case strings.HasPrefix(normalized, "glm-"),
 		strings.Contains(normalized, "glm-4"):
-		return true
+		return true, nil
 	default:
-		return nil
+		return nil, nil
 	}
 }
 
@@ -119,41 +140,29 @@ func ollamaChatURL(baseURL string) (string, error) {
 }
 
 func readOllamaStream(response *http.Response, onDelta DeltaHandler) (ChatResult, error) {
-	scanner := bufio.NewScanner(response.Body)
-	scanner.Buffer(make([]byte, 0, 4096), 1024*1024)
-
 	var content strings.Builder
 	var reasoning strings.Builder
 	toolCalls := make([]domain.ToolCall, 0)
 	finishReason := ""
 	usage := domain.UsageStats{}
 
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-
+	err := scanStreamLines(response.Body, streamScanOptions{}, func(line string) error {
 		var chunk ollamaStreamChunk
 		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
-			return ChatResult{}, fmt.Errorf("decode ollama stream chunk: %w", err)
+			return fmt.Errorf("decode ollama stream chunk: %w", err)
 		}
 
 		if chunk.Message.Thinking != "" {
 			reasoning.WriteString(chunk.Message.Thinking)
-			if onDelta != nil {
-				if err := onDelta(Delta{Reasoning: chunk.Message.Thinking}); err != nil {
-					return ChatResult{}, err
-				}
+			if err := emitDelta(onDelta, Delta{Reasoning: chunk.Message.Thinking}); err != nil {
+				return err
 			}
 		}
 
 		if chunk.Message.Content != "" {
 			content.WriteString(chunk.Message.Content)
-			if onDelta != nil {
-				if err := onDelta(Delta{Content: chunk.Message.Content}); err != nil {
-					return ChatResult{}, err
-				}
+			if err := emitDelta(onDelta, Delta{Content: chunk.Message.Content}); err != nil {
+				return err
 			}
 		}
 
@@ -177,8 +186,9 @@ func readOllamaStream(response *http.Response, onDelta DeltaHandler) (ChatResult
 				TotalTokens:      chunk.PromptEvalCount + chunk.EvalCount,
 			}
 		}
-	}
-	if err := scanner.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return ChatResult{}, fmt.Errorf("read ollama stream: %w", err)
 	}
 

@@ -3,42 +3,14 @@ package orchestrator
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/keonho-kim/orch/domain"
 	"github.com/keonho-kim/orch/internal/adapters"
+	"github.com/keonho-kim/orch/internal/prompts"
 	"github.com/keonho-kim/orch/internal/session"
 )
-
-type maintenanceRunner struct {
-	clients  map[domain.Provider]adapters.Client
-	settings func(domain.Provider) domain.ProviderSettings
-}
-
-func (r maintenanceRunner) Run(ctx context.Context, provider domain.Provider, model string, systemPrompt string, userPrompt string) (string, error) {
-	client, ok := r.clients[provider]
-	if !ok {
-		return "", fmt.Errorf("provider %s is not configured for maintenance", provider)
-	}
-	if r.settings == nil {
-		return "", fmt.Errorf("provider settings resolver is not configured")
-	}
-
-	result, err := client.Chat(ctx, r.settings(provider), adapters.ChatRequest{
-		Model: model,
-		Messages: []adapters.Message{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: userPrompt},
-		},
-	}, nil)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(result.Content), nil
-}
 
 func (s *Service) sessionContextMessages() ([]adapters.Message, error) {
 	s.mu.RLock()
@@ -146,42 +118,25 @@ func (s *Service) updateCurrentSessionTaskMetadata(
 	followups []string,
 	errorKind string,
 ) error {
-	s.mu.Lock()
+	s.mu.RLock()
 	meta := s.currentSession
-	if meta.WorkerRole == "" {
-		meta.WorkerRole = s.agentRole
-	}
-	if trimmed := strings.TrimSpace(status); trimmed != "" {
-		meta.TaskStatus = trimmed
-	}
-	if trimmed := strings.TrimSpace(summary); trimmed != "" && strings.TrimSpace(meta.TaskSummary) == "" {
-		meta.TaskSummary = trimmed
-	}
-	if len(changedPaths) > 0 && len(meta.TaskChangedPaths) == 0 {
-		meta.TaskChangedPaths = normalizeTaskValues(changedPaths)
-	}
-	if len(checksRun) > 0 && len(meta.TaskChecksRun) == 0 {
-		meta.TaskChecksRun = normalizeTaskValues(checksRun)
-	}
-	if len(evidencePointers) > 0 && len(meta.TaskEvidencePointers) == 0 {
-		normalized := normalizeTaskValues(evidencePointers)
-		if err := s.validateTaskEvidencePointers(normalized); err != nil {
-			s.mu.Unlock()
-			return err
-		}
-		meta.TaskEvidencePointers = normalized
-	}
-	if len(followups) > 0 && len(meta.TaskFollowups) == 0 {
-		meta.TaskFollowups = normalizeTaskValues(followups)
-	}
-	if trimmed := strings.TrimSpace(errorKind); trimmed != "" && strings.TrimSpace(meta.TaskErrorKind) == "" {
-		meta.TaskErrorKind = trimmed
-	}
-	meta.UpdatedAt = time.Now()
-	s.currentSession = meta
-	s.mu.Unlock()
+	s.mu.RUnlock()
 
-	return s.sessions.SaveMetadata(meta)
+	updated, err := s.sessions.UpdateTaskMetadata(meta, session.TaskMetadataUpdate{
+		WorkerRole:       s.agentRole,
+		Status:           status,
+		Summary:          summary,
+		ChangedPaths:     changedPaths,
+		ChecksRun:        checksRun,
+		EvidencePointers: evidencePointers,
+		Followups:        followups,
+		ErrorKind:        errorKind,
+	})
+	if err != nil {
+		return err
+	}
+	s.setCurrentSessionIfActive(updated)
+	return nil
 }
 
 func (s *Service) setCurrentSessionIfActive(meta domain.SessionMetadata) {
@@ -202,7 +157,14 @@ func (s *Service) forceCompactCurrentSession() error {
 	meta := s.currentSession
 	s.mu.RUnlock()
 
-	updated, err := s.sessions.Compact(context.Background(), meta)
+	s.maintenanceMu.Lock()
+	defer s.maintenanceMu.Unlock()
+
+	summary, throughSeq, err := s.generateCompactSummary(context.Background(), meta)
+	if err != nil {
+		return err
+	}
+	updated, err := s.sessions.ApplyCompactSummary(meta, throughSeq, summary)
 	if err != nil {
 		return err
 	}
@@ -219,7 +181,34 @@ func (s *Service) finalizeSessionByID(sessionID string) error {
 	if err != nil {
 		return err
 	}
-	updated, err := s.sessions.Finalize(context.Background(), meta)
+
+	s.maintenanceMu.Lock()
+	defer s.maintenanceMu.Unlock()
+
+	updated, err := s.sessions.MarkFinalizeStarted(meta)
+	if err != nil {
+		return err
+	}
+
+	title, err := s.deriveSessionTitle(context.Background(), updated)
+	if err != nil {
+		return err
+	}
+	updated, err = s.sessions.ApplyTitle(updated, title)
+	if err != nil {
+		return err
+	}
+
+	summary, throughSeq, err := s.generateCompactSummary(context.Background(), updated)
+	if err != nil {
+		return err
+	}
+	updated, err = s.sessions.ApplyCompactSummary(updated, throughSeq, summary)
+	if err != nil {
+		return err
+	}
+
+	updated, err = s.sessions.MarkFinalized(updated, time.Now())
 	if err != nil {
 		return err
 	}
@@ -240,9 +229,12 @@ func (s *Service) runSessionMaintenance(sessionID string) {
 		return
 	}
 
-	title, err := s.sessions.DeriveTitle(context.Background(), meta)
+	s.maintenanceMu.Lock()
+	defer s.maintenanceMu.Unlock()
+
+	title, err := s.deriveSessionTitle(context.Background(), meta)
 	if err == nil && strings.TrimSpace(title) != "" {
-		if updated, updateErr := s.sessions.UpdateTitle(meta, title); updateErr == nil {
+		if updated, updateErr := s.sessions.ApplyTitle(meta, title); updateErr == nil {
 			meta = updated
 			s.setCurrentSessionIfActive(updated)
 			s.publish(UIEvent{Type: "snapshot", SessionID: updated.SessionID, Message: "Session title updated."})
@@ -253,7 +245,12 @@ func (s *Service) runSessionMaintenance(sessionID string) {
 	settings := s.settings
 	s.mu.RUnlock()
 	if s.sessions.ShouldCompact(settings, meta) {
-		if updated, compactErr := s.sessions.Compact(context.Background(), meta); compactErr == nil {
+		summary, throughSeq, compactErr := s.generateCompactSummary(context.Background(), meta)
+		if compactErr == nil {
+			updated, applyErr := s.sessions.ApplyCompactSummary(meta, throughSeq, summary)
+			if applyErr != nil {
+				return
+			}
 			s.setCurrentSessionIfActive(updated)
 			s.publish(UIEvent{Type: "snapshot", SessionID: updated.SessionID, Message: "Session compacted."})
 		}
@@ -264,7 +261,7 @@ func (s *Service) runChatHistoryUserSummary(meta domain.SessionMetadata, runID s
 	if strings.TrimSpace(prompt) == "" {
 		return
 	}
-	if err := s.sessions.AppendChatHistoryUserSummary(context.Background(), meta, runID, prompt); err != nil {
+	if err := s.appendChatHistorySummary(context.Background(), meta, runID, prompt, session.ChatHistorySpeakerUser, prompts.ChatHistoryUserPrompt()); err != nil {
 		_ = s.appendRunEvent(runID, "chat_history", fmt.Sprintf("Could not append user chatHistory summary: %v", err))
 	}
 }
@@ -279,44 +276,127 @@ func (s *Service) runChatHistoryAssistantSummary(sessionID string, runID string,
 		_ = s.appendRunEvent(runID, "chat_history", fmt.Sprintf("Could not load session metadata for chatHistory: %v", err))
 		return
 	}
-	if err := s.sessions.AppendChatHistoryAssistantSummary(context.Background(), meta, runID, content); err != nil {
+	if err := s.appendChatHistorySummary(context.Background(), meta, runID, content, session.ChatHistorySpeakerAssistant, prompts.ChatHistoryAssistantPrompt()); err != nil {
 		_ = s.appendRunEvent(runID, "chat_history", fmt.Sprintf("Could not append assistant chatHistory summary: %v", err))
 	}
 }
 
-func normalizeTaskValues(values []string) []string {
-	normalized := make([]string, 0, len(values))
-	seen := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
-			continue
-		}
-		if _, ok := seen[trimmed]; ok {
-			continue
-		}
-		seen[trimmed] = struct{}{}
-		normalized = append(normalized, trimmed)
+func (s *Service) deriveSessionTitle(ctx context.Context, meta domain.SessionMetadata) (string, error) {
+	input, err := s.sessions.LoadTitleInput(meta)
+	if err != nil {
+		return "", err
 	}
-	return normalized
+	if strings.TrimSpace(input.Transcript) != "" {
+		title, runErr := s.runMaintenancePrompt(ctx, meta, prompts.SessionTitlePrompt(), input.Transcript)
+		if runErr == nil && strings.TrimSpace(title) != "" {
+			return title, nil
+		}
+	}
+	return session.FallbackSessionTitle(input.Records, meta.Title), nil
 }
 
-func (s *Service) validateTaskEvidencePointers(values []string) error {
-	for _, value := range values {
-		pointer, err := session.ParseOTPointer(value)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(pointer.SessionID) == "" {
-			continue
-		}
-		path := filepath.Join(s.paths.SessionsDir, pointer.SessionID+".jsonl")
-		if _, err := os.Stat(path); err != nil {
-			if os.IsNotExist(err) {
-				return fmt.Errorf("evidence pointer session %s not found", pointer.SessionID)
-			}
-			return fmt.Errorf("stat evidence pointer session %s: %w", pointer.SessionID, err)
-		}
+func (s *Service) generateCompactSummary(ctx context.Context, meta domain.SessionMetadata) (string, int64, error) {
+	input, err := s.sessions.LoadCompactInput(meta)
+	if err != nil {
+		return "", 0, err
 	}
-	return nil
+	if len(input.Records) == 0 {
+		return "", 0, nil
+	}
+	if strings.TrimSpace(input.Transcript) == "" {
+		return session.BuildCompactSummary(input.Records, input.ThroughSeq), input.ThroughSeq, nil
+	}
+
+	topicsRaw, runErr := s.runMaintenancePrompt(ctx, meta, prompts.SessionTopicsPrompt(), input.Transcript)
+	if runErr != nil {
+		return session.BuildCompactSummary(input.Records, input.ThroughSeq), input.ThroughSeq, nil
+	}
+
+	topics := session.ParseCompactTopics(topicsRaw)
+	if len(topics) == 0 {
+		topics = session.FallbackCompactTopics(input.Records, input.ThroughSeq)
+	}
+	if len(topics) == 0 {
+		return session.BuildCompactSummary(input.Records, input.ThroughSeq), input.ThroughSeq, nil
+	}
+
+	parts := make([]string, 0, len(topics)+1)
+	parts = append(parts, "Compact summary")
+	for _, topic := range topics {
+		summary, topicErr := s.runMaintenancePrompt(
+			ctx,
+			meta,
+			prompts.SessionTopicSummaryPrompt(topic.Title, session.JoinCompactLines(topic.Lines)),
+			input.Transcript,
+		)
+		summary = strings.TrimSpace(summary)
+		if topicErr != nil || summary == "" {
+			summary = session.FallbackCompactTopicSummary(input.Records, topic)
+		}
+		parts = append(parts, session.RenderPointerParagraph(summary, topic.Lines))
+	}
+
+	return strings.Join(parts, "\n\n"), input.ThroughSeq, nil
+}
+
+func (s *Service) appendChatHistorySummary(
+	ctx context.Context,
+	meta domain.SessionMetadata,
+	runID string,
+	content string,
+	speaker session.ChatHistorySpeaker,
+	systemPrompt string,
+) error {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil
+	}
+
+	s.maintenanceMu.Lock()
+	defer s.maintenanceMu.Unlock()
+
+	summary, err := s.runMaintenancePrompt(ctx, meta, systemPrompt, content)
+	if err != nil {
+		return err
+	}
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		summary = clipChatHistorySummary(content)
+	}
+
+	if speaker == session.ChatHistorySpeakerUser {
+		return s.sessions.AppendChatHistoryUser(meta, runID, summary)
+	}
+	return s.sessions.AppendChatHistoryAssistant(meta, runID, summary)
+}
+
+func (s *Service) runMaintenancePrompt(ctx context.Context, meta domain.SessionMetadata, systemPrompt string, userPrompt string) (string, error) {
+	client, ok := s.clients[meta.Provider]
+	if !ok {
+		return "", fmt.Errorf("provider %s is not configured for maintenance", meta.Provider)
+	}
+
+	s.mu.RLock()
+	settings := s.settings.ConfigFor(meta.Provider)
+	s.mu.RUnlock()
+
+	result, err := client.Chat(ctx, settings, adapters.ChatRequest{
+		Model: meta.Model,
+		Messages: []adapters.Message{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
+	}, nil)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(result.Content), nil
+}
+
+func clipChatHistorySummary(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= session.ChatHistoryFallbackLimit {
+		return value
+	}
+	return value[:session.ChatHistoryFallbackLimit]
 }

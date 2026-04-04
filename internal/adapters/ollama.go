@@ -78,7 +78,9 @@ func ListOllamaModels(ctx context.Context, baseURL string) ([]string, string, er
 	if err != nil {
 		return nil, "", fmt.Errorf("connect to Ollama: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, "", fmt.Errorf("ollama model list failed: status=%s", response.Status)

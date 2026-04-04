@@ -12,7 +12,7 @@ func TestAppendAndLoadLatestContextSnapshot(t *testing.T) {
 	t.Parallel()
 
 	manager := NewManager(filepath.Join(t.TempDir(), ".orch", "sessions"))
-	service := NewService(manager, nil)
+	service := NewService(manager)
 	meta, err := manager.Create("/repo", domain.ProviderOllama, "model", time.Now(), "", "", "", domain.AgentRoleGateway, "", "", "")
 	if err != nil {
 		t.Fatalf("create session: %v", err)
@@ -45,7 +45,7 @@ func TestListTasksAndGetTaskDeriveFromSessionMetadata(t *testing.T) {
 	t.Parallel()
 
 	manager := NewManager(filepath.Join(t.TempDir(), ".orch", "sessions"))
-	service := NewService(manager, nil)
+	service := NewService(manager)
 	parent, err := manager.Create("/repo", domain.ProviderOllama, "parent-model", time.Now(), "", "", "", domain.AgentRoleGateway, "", "", "")
 	if err != nil {
 		t.Fatalf("create parent session: %v", err)

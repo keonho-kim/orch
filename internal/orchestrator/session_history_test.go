@@ -8,9 +8,22 @@ import (
 	"time"
 
 	"github.com/keonho-kim/orch/domain"
+	"github.com/keonho-kim/orch/internal/adapters"
 	"github.com/keonho-kim/orch/internal/config"
 	"github.com/keonho-kim/orch/internal/session"
 )
+
+type chatHistoryClientStub struct {
+	content string
+}
+
+func (c chatHistoryClientStub) Provider() domain.Provider {
+	return domain.ProviderOllama
+}
+
+func (c chatHistoryClientStub) Chat(_ context.Context, _ domain.ProviderSettings, _ adapters.ChatRequest, _ adapters.DeltaHandler) (adapters.ChatResult, error) {
+	return adapters.ChatResult{Content: c.content}, nil
+}
 
 func TestSessionContextMessagesUseLatestCompactAndLaterRecords(t *testing.T) {
 	t.Parallel()
@@ -50,7 +63,7 @@ func TestSessionContextMessagesUseLatestCompactAndLaterRecords(t *testing.T) {
 	service := &Service{
 		ctx:            context.Background(),
 		paths:          paths,
-		sessions:       session.NewService(manager, nil),
+		sessions:       session.NewService(manager),
 		currentSession: meta,
 	}
 
@@ -110,7 +123,10 @@ func TestLoadInheritedContextUsesParentCompactSummaryAndLaterRecords(t *testing.
 	service := &Service{
 		ctx:      context.Background(),
 		paths:    paths,
-		sessions: session.NewService(manager, nil),
+		sessions: session.NewService(manager),
+		clients: map[domain.Provider]adapters.Client{
+			domain.ProviderOllama: chatHistoryClientStub{content: "user digest"},
+		},
 	}
 
 	inherited, err := service.loadInheritedContext(BootOptions{
@@ -145,7 +161,10 @@ func TestRunChatHistoryUserSummaryAppendsEntry(t *testing.T) {
 	service := &Service{
 		ctx:      context.Background(),
 		paths:    paths,
-		sessions: session.NewService(manager, nil),
+		sessions: session.NewService(manager),
+		clients: map[domain.Provider]adapters.Client{
+			domain.ProviderOllama: chatHistoryClientStub{content: "user digest"},
+		},
 	}
 
 	service.runChatHistoryUserSummary(meta, "R1", "please inspect the failing tests")
@@ -154,7 +173,7 @@ func TestRunChatHistoryUserSummaryAppendsEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read chat history: %v", err)
 	}
-	if !strings.Contains(history, "| user") || !strings.Contains(history, "please inspect the failing tests") {
+	if !strings.Contains(history, "| user") || !strings.Contains(history, "user digest") {
 		t.Fatalf("unexpected chat history: %q", history)
 	}
 }
@@ -176,7 +195,10 @@ func TestRunChatHistoryAssistantSummaryAppendsEntry(t *testing.T) {
 	service := &Service{
 		ctx:      context.Background(),
 		paths:    paths,
-		sessions: session.NewService(manager, nil),
+		sessions: session.NewService(manager),
+		clients: map[domain.Provider]adapters.Client{
+			domain.ProviderOllama: chatHistoryClientStub{content: "assistant digest"},
+		},
 	}
 
 	service.runChatHistoryAssistantSummary(meta.SessionID, "R2", "I found the regression and described the fix.")
@@ -185,7 +207,7 @@ func TestRunChatHistoryAssistantSummaryAppendsEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read chat history: %v", err)
 	}
-	if !strings.Contains(history, "| assistant") || !strings.Contains(history, "I found the regression and described the fix.") {
+	if !strings.Contains(history, "| assistant") || !strings.Contains(history, "assistant digest") {
 		t.Fatalf("unexpected chat history: %q", history)
 	}
 }

@@ -1,36 +1,19 @@
 package session
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/keonho-kim/orch/domain"
-	"github.com/keonho-kim/orch/internal/prompts"
 )
 
-type compactRunnerStub struct{}
-
-func (compactRunnerStub) Run(_ context.Context, _ domain.Provider, _ string, systemPrompt string, _ string) (string, error) {
-	switch {
-	case systemPrompt == prompts.SessionTopicsPrompt():
-		return "Setup | lines=1,2\nFix | lines=4,5", nil
-	case strings.Contains(systemPrompt, "Setup"):
-		return "Setup summary", nil
-	case strings.Contains(systemPrompt, "Fix"):
-		return "Fix summary", nil
-	default:
-		return "", nil
-	}
-}
-
-func TestCompactProducesOrderedPointerAwareSummary(t *testing.T) {
+func TestLoadCompactInputProducesPointerAwareTranscript(t *testing.T) {
 	t.Parallel()
 
 	manager := NewManager(filepath.Join(t.TempDir(), ".orch", "sessions"))
-	service := NewService(manager, compactRunnerStub{})
+	service := NewService(manager)
 
 	meta, err := manager.Create("/repo", domain.ProviderOllama, "model", time.Now(), "", "", "", domain.AgentRoleGateway, "", "", "")
 	if err != nil {
@@ -44,17 +27,34 @@ func TestCompactProducesOrderedPointerAwareSummary(t *testing.T) {
 		{Seq: 5, SessionID: meta.SessionID, Type: domain.SessionRecordAssistant, Content: "fix answer", CreatedAt: time.Now()},
 	}
 
-	summary, err := service.generateCompactSummary(context.Background(), meta, records, 5)
+	for _, record := range records {
+		if err := manager.AppendRecord(meta.SessionID, record); err != nil {
+			t.Fatalf("append record: %v", err)
+		}
+	}
+
+	input, err := service.LoadCompactInput(meta)
 	if err != nil {
-		t.Fatalf("generate compact summary: %v", err)
+		t.Fatalf("load compact input: %v", err)
 	}
-	if !strings.Contains(summary, "Setup summary\nPointer: ot-pointer://current?") {
-		t.Fatalf("expected setup pointer summary, got %q", summary)
+	if input.ThroughSeq != 5 {
+		t.Fatalf("unexpected through sequence: %d", input.ThroughSeq)
 	}
-	if !strings.Contains(summary, "Fix summary\nPointer: ot-pointer://current?") {
-		t.Fatalf("expected fix pointer summary, got %q", summary)
+	if !strings.Contains(input.Transcript, "[line 1] User: setup request") {
+		t.Fatalf("expected user transcript line, got %q", input.Transcript)
 	}
-	if strings.Index(summary, "Setup summary") > strings.Index(summary, "Fix summary") {
-		t.Fatalf("expected chronological topic order, got %q", summary)
+	if !strings.Contains(input.Transcript, "[line 5] Assistant: fix answer") {
+		t.Fatalf("expected assistant transcript line, got %q", input.Transcript)
+	}
+
+	topics := ParseCompactTopics("Setup | lines=1,2\nFix | lines=4,5")
+	if len(topics) != 2 {
+		t.Fatalf("unexpected topics: %+v", topics)
+	}
+	if JoinCompactLines(topics[0].Lines) != "1,2" {
+		t.Fatalf("unexpected topic lines: %+v", topics[0])
+	}
+	if got := RenderPointerParagraph("Setup summary", topics[0].Lines); !strings.Contains(got, "Pointer: ot-pointer://current?") {
+		t.Fatalf("expected pointer paragraph, got %q", got)
 	}
 }

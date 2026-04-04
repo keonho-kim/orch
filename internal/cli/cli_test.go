@@ -167,7 +167,7 @@ func TestStartAttachedAPIServerStartsAndPublishesDiscovery(t *testing.T) {
 	t.Setenv("ORCH_MANAGED_SETTINGS", filepath.Join(home, "managed-settings.json"))
 
 	repoRoot := t.TempDir()
-	app, err := newApp(repoRoot, orchestrator.BootOptions{})
+	app, err := newApp(repoRoot, "", orchestrator.BootOptions{})
 	if err != nil {
 		t.Fatalf("new app: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestStartAttachedAPIServerFailureIsNonFatal(t *testing.T) {
 	t.Setenv("ORCH_MANAGED_SETTINGS", filepath.Join(home, "managed-settings.json"))
 
 	repoRoot := t.TempDir()
-	app, err := newApp(repoRoot, orchestrator.BootOptions{})
+	app, err := newApp(repoRoot, "", orchestrator.BootOptions{})
 	if err != nil {
 		t.Fatalf("new app: %v", err)
 	}

@@ -52,7 +52,9 @@ func TestStatusRequiresBearerToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get status: %v", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 	if response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unexpected status code: %d", response.StatusCode)
 	}
@@ -68,7 +70,9 @@ func TestStatusAndEventsEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status request: %v", err)
 	}
-	defer statusResponse.Body.Close()
+	defer func() {
+		_ = statusResponse.Body.Close()
+	}()
 	if statusResponse.StatusCode != http.StatusOK {
 		t.Fatalf("unexpected status response code: %d", statusResponse.StatusCode)
 	}
@@ -89,7 +93,9 @@ func TestStatusAndEventsEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("events request: %v", err)
 	}
-	defer eventsResponse.Body.Close()
+	defer func() {
+		_ = eventsResponse.Body.Close()
+	}()
 	reader := bufio.NewReader(eventsResponse.Body)
 	eventType, payload := readSSEEvent(t, reader)
 	if eventType != "snapshot" || !strings.Contains(payload, `"status"`) {
@@ -135,7 +141,9 @@ func TestExecEndpointsAndRunEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run events request: %v", err)
 	}
-	defer eventsResponse.Body.Close()
+	defer func() {
+		_ = eventsResponse.Body.Close()
+	}()
 	reader := bufio.NewReader(eventsResponse.Body)
 	eventType, payload := readSSEEvent(t, reader)
 	if eventType != "snapshot" || !strings.Contains(payload, runID) {
@@ -153,6 +161,14 @@ func TestHistoryAndConfigEndpoints(t *testing.T) {
 	server, svc, cleanup := newTestServer(t)
 	defer cleanup()
 
+	first := seedHistorySessions(t, server)
+	assertHistoryEndpoints(t, server)
+	assertRestoreEndpoint(t, server, svc, first.SessionID)
+	assertConfigEndpoints(t, server)
+}
+
+func seedHistorySessions(t *testing.T, server *Server) domain.SessionMetadata {
+	t.Helper()
 	manager := session.NewManager(server.paths.SessionsDir)
 	first, err := manager.Create(server.paths.RepoRoot, domain.ProviderOllama, "model", time.Now().Add(-time.Hour), "", "", "", domain.AgentRoleGateway, "", "", "")
 	if err != nil {
@@ -173,7 +189,11 @@ func TestHistoryAndConfigEndpoints(t *testing.T) {
 			t.Fatalf("append record: %v", err)
 		}
 	}
+	return first
+}
 
+func assertHistoryEndpoints(t *testing.T, server *Server) {
+	t.Helper()
 	historyResponse := doRequest(t, server, http.MethodGet, "/v1/history?limit=10", "")
 	if historyResponse.StatusCode != http.StatusOK {
 		t.Fatalf("unexpected history code: %d", historyResponse.StatusCode)
@@ -199,20 +219,29 @@ func TestHistoryAndConfigEndpoints(t *testing.T) {
 	if latestBody["session_id"] == "" {
 		t.Fatalf("expected latest session id: %+v", latestBody)
 	}
+}
 
-	restoreResponse := doJSON(t, server, http.MethodPost, "/v1/history/restore", map[string]string{"session_id": first.SessionID})
+func assertRestoreEndpoint(t *testing.T, server *Server, svc *orchestrator.Service, sessionID string) {
+	t.Helper()
+	restoreResponse := doJSON(t, server, http.MethodPost, "/v1/history/restore", map[string]string{"session_id": sessionID})
 	if restoreResponse.StatusCode != http.StatusOK {
 		t.Fatalf("unexpected restore code: %d", restoreResponse.StatusCode)
 	}
 	_ = restoreResponse.Body.Close()
-	if svc.Status().CurrentSession.SessionID != first.SessionID {
+	if svc.Status().CurrentSession.SessionID != sessionID {
 		t.Fatalf("expected restored session, got %+v", svc.Status())
 	}
+}
 
-	configPatchResponse := doJSON(t, server, http.MethodPatch, "/v1/config?scope=project", map[string]any{
-		"set": map[string]string{
-			"default_provider":        "chatgpt",
-			"providers.chatgpt.model": "gpt-4.1",
+func assertConfigEndpoints(t *testing.T, server *Server) {
+	t.Helper()
+	configPatchResponse := doJSON(t, server, http.MethodPatch, "/v1/config", map[string]any{
+		"provider": "chatgpt",
+		"providers": map[string]any{
+			"chatgpt": map[string]any{
+				"model":   "gpt-4.1",
+				"api_key": "1234567890abcdefghijklmnopqrstuvwxyz",
+			},
 		},
 	})
 	if configPatchResponse.StatusCode != http.StatusOK {
@@ -220,23 +249,23 @@ func TestHistoryAndConfigEndpoints(t *testing.T) {
 	}
 	_ = configPatchResponse.Body.Close()
 
-	configGetResponse := doRequest(t, server, http.MethodGet, "/v1/config?scope=project&show_origin=true", "")
+	configGetResponse := doRequest(t, server, http.MethodGet, "/v1/config", "")
 	if configGetResponse.StatusCode != http.StatusOK {
 		t.Fatalf("unexpected config get code: %d", configGetResponse.StatusCode)
 	}
 	var configBody struct {
-		Entries map[string]string `json:"entries"`
-		Origins map[string]any    `json:"origins"`
+		Path   string          `json:"path"`
+		Config config.Document `json:"config"`
 	}
 	if err := json.NewDecoder(configGetResponse.Body).Decode(&configBody); err != nil {
 		t.Fatalf("decode config get response: %v", err)
 	}
 	_ = configGetResponse.Body.Close()
-	if configBody.Entries["default_provider"] != "chatgpt" || configBody.Entries["providers.chatgpt.model"] != "gpt-4.1" {
-		t.Fatalf("unexpected config entries: %+v", configBody.Entries)
+	if configBody.Config.Provider != "chatgpt" || configBody.Config.Providers.ChatGPT.Model != "gpt-4.1" {
+		t.Fatalf("unexpected config body: %+v", configBody)
 	}
-	if len(configBody.Origins) == 0 {
-		t.Fatalf("expected config origins, got %+v", configBody)
+	if configBody.Config.Providers.ChatGPT.APIKey != "1234567890***vwxyz" {
+		t.Fatalf("expected redacted API key, got %+v", configBody.Config.Providers.ChatGPT)
 	}
 }
 
@@ -258,14 +287,15 @@ func newTestServer(t *testing.T) (*Server, *orchestrator.Service, func()) {
 		t.Fatalf("ensure runtime paths: %v", err)
 	}
 
-	projectSettings := config.ScopeSettings{}
-	if err := projectSettings.SetKey(config.KeyDefaultProvider, "ollama"); err != nil {
-		t.Fatalf("set default provider: %v", err)
-	}
-	if err := projectSettings.SetKey(config.ProviderModelKey(domain.ProviderOllama), "test-model"); err != nil {
-		t.Fatalf("set ollama model: %v", err)
-	}
-	if err := config.SaveScopeSettings(paths, config.ScopeProject, projectSettings); err != nil {
+	if err := config.SaveSettings(paths, domain.Settings{
+		DefaultProvider: domain.ProviderOllama,
+		Providers: domain.ProviderCatalog{
+			Ollama: domain.ProviderSettings{
+				Endpoint: "http://localhost:11434/v1",
+				Model:    "test-model",
+			},
+		},
+	}); err != nil {
 		t.Fatalf("save project settings: %v", err)
 	}
 

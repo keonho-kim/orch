@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -19,11 +18,6 @@ type openAICompatibleClient struct {
 	provider domain.Provider
 }
 
-const (
-	reasoningFallbackEnv = "ORCH_OPENAI_REASONING_FALLBACK"
-	reasoningByModelEnv  = "ORCH_OPENAI_REASONING_BY_MODEL"
-)
-
 type openAIStreamOptions struct {
 	IncludeUsage bool `json:"include_usage"`
 }
@@ -37,6 +31,7 @@ type openAICompatibleRequest struct {
 	StreamOptions      *openAIStreamOptions `json:"stream_options,omitempty"`
 	ChatTemplate       string               `json:"chat_template,omitempty"`
 	ChatTemplateKwargs map[string]any       `json:"chat_template_kwargs,omitempty"`
+	ReasoningEffort    string               `json:"reasoning_effort,omitempty"`
 }
 
 type streamUsage struct {
@@ -45,25 +40,31 @@ type streamUsage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
+type streamToolCallDelta struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+type streamDelta struct {
+	Content          string                `json:"content"`
+	ReasoningContent string                `json:"reasoning_content"`
+	Reasoning        string                `json:"reasoning"`
+	ToolCalls        []streamToolCallDelta `json:"tool_calls"`
+}
+
+type streamChoice struct {
+	Delta        streamDelta `json:"delta"`
+	FinishReason string      `json:"finish_reason"`
+}
+
 type streamEnvelope struct {
-	Choices []struct {
-		Delta struct {
-			Content          string `json:"content"`
-			ReasoningContent string `json:"reasoning_content"`
-			Reasoning        string `json:"reasoning"`
-			ToolCalls        []struct {
-				Index    int    `json:"index"`
-				ID       string `json:"id"`
-				Type     string `json:"type"`
-				Function struct {
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
-				} `json:"function"`
-			} `json:"tool_calls"`
-		} `json:"delta"`
-		FinishReason string `json:"finish_reason"`
-	} `json:"choices"`
-	Usage streamUsage `json:"usage"`
+	Choices []streamChoice `json:"choices"`
+	Usage   streamUsage    `json:"usage"`
 }
 
 func newOpenAICompatibleClient(provider domain.Provider) Client {
@@ -75,7 +76,7 @@ func (c openAICompatibleClient) Provider() domain.Provider {
 }
 
 func (c openAICompatibleClient) Chat(ctx context.Context, settings domain.ProviderSettings, request ChatRequest, onDelta DeltaHandler) (ChatResult, error) {
-	payload, err := buildOpenAICompatibleRequest(c.provider, request)
+	payload, err := buildOpenAICompatibleRequest(c.provider, settings, request)
 	if err != nil {
 		return ChatResult{}, err
 	}
@@ -103,22 +104,24 @@ func (c openAICompatibleClient) Chat(ctx context.Context, settings domain.Provid
 	if err != nil {
 		return ChatResult{}, fmt.Errorf("send chat request: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		data, _ := io.ReadAll(response.Body)
 		return ChatResult{}, fmt.Errorf("chat request failed: status=%s body=%s", response.Status, strings.TrimSpace(string(data)))
 	}
 
-	reasoningConfig, err := resolveReasoningConfig()
-	if err != nil {
-		return ChatResult{}, err
-	}
-	return readOpenAICompatibleStream(response, request.Model, reasoningConfig, onDelta)
+	return readOpenAICompatibleStream(response, onDelta)
 }
 
-func buildOpenAICompatibleRequest(provider domain.Provider, request ChatRequest) (openAICompatibleRequest, error) {
-	profile := modelProfile(provider, request.Model)
+func buildOpenAICompatibleRequest(provider domain.Provider, settings domain.ProviderSettings, request ChatRequest) (openAICompatibleRequest, error) {
+	profile, err := modelProfile(provider, request.Model, settings.Reasoning)
+	if err != nil {
+		return openAICompatibleRequest{}, err
+	}
+
 	payload := openAICompatibleRequest{
 		Messages: request.Messages,
 		Tools:    request.Tools,
@@ -131,15 +134,19 @@ func buildOpenAICompatibleRequest(provider domain.Provider, request ChatRequest)
 	case domain.ProviderVLLM:
 		payload.Model = request.Model
 		payload.StreamIncludeUsage = true
-		if profile.ChatTemplate != "" {
-			payload.ChatTemplate = profile.ChatTemplate
-		}
-		if len(profile.ChatTemplateKwargs) > 0 {
-			payload.ChatTemplateKwargs = profile.ChatTemplateKwargs
-		}
 	default:
 		payload.Model = request.Model
 		payload.StreamOptions = &openAIStreamOptions{IncludeUsage: true}
+	}
+
+	if profile.ChatTemplate != "" {
+		payload.ChatTemplate = profile.ChatTemplate
+	}
+	if len(profile.ChatTemplateKwargs) > 0 {
+		payload.ChatTemplateKwargs = profile.ChatTemplateKwargs
+	}
+	if profile.ReasoningEffort != "" {
+		payload.ReasoningEffort = profile.ReasoningEffort
 	}
 
 	return payload, nil
@@ -148,54 +155,97 @@ func buildOpenAICompatibleRequest(provider domain.Provider, request ChatRequest)
 type openAIModelProfile struct {
 	ChatTemplate       string
 	ChatTemplateKwargs map[string]any
+	ReasoningEffort    string
 }
 
-func modelProfile(provider domain.Provider, model string) openAIModelProfile {
-	if provider != domain.ProviderVLLM {
-		return openAIModelProfile{}
+func modelProfile(provider domain.Provider, model string, reasoning string) (openAIModelProfile, error) {
+	reasoning = strings.ToLower(strings.TrimSpace(reasoning))
+	switch provider {
+	case domain.ProviderChatGPT, domain.ProviderAzure:
+		return openAIReasoningProfile(reasoning)
+	case domain.ProviderVLLM:
+		return vllmProfile(model, reasoning)
+	default:
+		if reasoning != "" {
+			return openAIModelProfile{}, fmt.Errorf("%s does not support configured reasoning transport", provider.DisplayName())
+		}
+		return openAIModelProfile{}, nil
 	}
+}
 
+func openAIReasoningProfile(reasoning string) (openAIModelProfile, error) {
+	switch reasoning {
+	case "":
+		return openAIModelProfile{}, nil
+	case "true":
+		return openAIModelProfile{}, nil
+	case "false":
+		return openAIModelProfile{ReasoningEffort: "none"}, nil
+	case "low", "medium", "high", "xhigh":
+		return openAIModelProfile{ReasoningEffort: reasoning}, nil
+	default:
+		return openAIModelProfile{}, fmt.Errorf("unsupported reasoning value %q", reasoning)
+	}
+}
+
+func vllmProfile(model string, reasoning string) (openAIModelProfile, error) {
+	template := func(envName string) string {
+		return strings.TrimSpace(osValue(envName))
+	}
 	normalized := strings.ToLower(strings.TrimSpace(model))
+
 	switch {
 	case strings.Contains(normalized, "qwen") && (strings.Contains(normalized, "3.5") || strings.Contains(normalized, "35")):
-		return openAIModelProfile{
-			ChatTemplate:       strings.TrimSpace(os.Getenv("ORCH_VLLM_CHAT_TEMPLATE_QWEN35")),
-			ChatTemplateKwargs: map[string]any{"enable_thinking": true},
-		}
+		return vllmBoolProfile(template("ORCH_VLLM_CHAT_TEMPLATE_QWEN35"), "enable_thinking", reasoning)
 	case strings.Contains(normalized, "deepseek"):
-		return openAIModelProfile{
-			ChatTemplate:       strings.TrimSpace(os.Getenv("ORCH_VLLM_CHAT_TEMPLATE_DEEPSEEK")),
-			ChatTemplateKwargs: map[string]any{"thinking": true},
+		return vllmBoolProfile(template("ORCH_VLLM_CHAT_TEMPLATE_DEEPSEEK"), "thinking", reasoning)
+	case strings.Contains(normalized, "gemma-4"), strings.Contains(normalized, "gemma4"):
+		if reasoning != "" {
+			return openAIModelProfile{}, fmt.Errorf("vLLM model %s only supports default reasoning behavior in this release", model)
 		}
-	case strings.Contains(normalized, "gemma-4"),
-		strings.Contains(normalized, "gemma4"):
-		return openAIModelProfile{
-			ChatTemplate: strings.TrimSpace(os.Getenv("ORCH_VLLM_CHAT_TEMPLATE_GEMMA4")),
+		return openAIModelProfile{ChatTemplate: template("ORCH_VLLM_CHAT_TEMPLATE_GEMMA4")}, nil
+	case strings.HasPrefix(normalized, "glm-"), strings.Contains(normalized, "glm-4"):
+		if reasoning != "" {
+			return openAIModelProfile{}, fmt.Errorf("vLLM model %s only supports default reasoning behavior in this release", model)
 		}
-	case strings.HasPrefix(normalized, "glm-"),
-		strings.Contains(normalized, "glm-4"):
-		return openAIModelProfile{
-			ChatTemplate: strings.TrimSpace(os.Getenv("ORCH_VLLM_CHAT_TEMPLATE_GLM")),
-		}
+		return openAIModelProfile{ChatTemplate: template("ORCH_VLLM_CHAT_TEMPLATE_GLM")}, nil
 	default:
-		return openAIModelProfile{}
+		if reasoning != "" {
+			return openAIModelProfile{}, fmt.Errorf("vLLM model %s does not support explicit reasoning control", model)
+		}
+		return openAIModelProfile{}, nil
 	}
+}
+
+func vllmBoolProfile(chatTemplate string, key string, reasoning string) (openAIModelProfile, error) {
+	profile := openAIModelProfile{ChatTemplate: chatTemplate}
+	switch reasoning {
+	case "":
+		profile.ChatTemplateKwargs = map[string]any{key: true}
+	case "true":
+		profile.ChatTemplateKwargs = map[string]any{key: true}
+	case "false":
+		profile.ChatTemplateKwargs = map[string]any{key: false}
+	default:
+		return openAIModelProfile{}, fmt.Errorf("vLLM only supports true/false reasoning in this release")
+	}
+	return profile, nil
 }
 
 func openAICompatibleChatURL(provider domain.Provider, settings domain.ProviderSettings, model string) (string, error) {
 	switch provider {
 	case domain.ProviderAzure:
-		baseURL := strings.TrimSpace(settings.BaseURL)
-		if baseURL == "" {
-			return "", fmt.Errorf("Azure base URL is required")
+		endpoint := strings.TrimSpace(settings.Endpoint)
+		if endpoint == "" {
+			return "", fmt.Errorf("azure endpoint is required")
 		}
 		if strings.TrimSpace(model) == "" {
-			return "", fmt.Errorf("Azure model is required")
+			return "", fmt.Errorf("azure model is required")
 		}
 
-		parsed, err := url.Parse(strings.TrimRight(baseURL, "/"))
+		parsed, err := url.Parse(strings.TrimRight(endpoint, "/"))
 		if err != nil {
-			return "", fmt.Errorf("parse Azure base URL: %w", err)
+			return "", fmt.Errorf("parse Azure endpoint: %w", err)
 		}
 		cleanPath := strings.TrimRight(parsed.Path, "/")
 		cleanPath = strings.TrimSuffix(cleanPath, "/openai/v1")
@@ -206,11 +256,11 @@ func openAICompatibleChatURL(provider domain.Provider, settings domain.ProviderS
 		parsed.RawQuery = query.Encode()
 		return parsed.String(), nil
 	default:
-		baseURL := settings.NormalizedBaseURL()
-		if baseURL == "" {
-			return "", fmt.Errorf("%s base URL is required", provider.DisplayName())
+		endpoint := settings.NormalizedEndpoint()
+		if endpoint == "" {
+			return "", fmt.Errorf("%s endpoint is required", provider.DisplayName())
 		}
-		return strings.TrimRight(baseURL, "/") + "/chat/completions", nil
+		return strings.TrimRight(endpoint, "/") + "/chat/completions", nil
 	}
 }
 
@@ -224,10 +274,7 @@ func applyOpenAICompatibleAuth(request *http.Request, provider domain.Provider, 
 		request.Header.Set("api-key", apiKey)
 		return nil
 	case domain.ProviderVLLM:
-		apiKey, err := optionalAPIKey(settings)
-		if err != nil {
-			return err
-		}
+		apiKey := strings.TrimSpace(settings.APIKey)
 		if apiKey != "" {
 			request.Header.Set("Authorization", "Bearer "+apiKey)
 		}
@@ -242,176 +289,136 @@ func applyOpenAICompatibleAuth(request *http.Request, provider domain.Provider, 
 	}
 }
 
-func optionalAPIKey(settings domain.ProviderSettings) (string, error) {
-	name := strings.TrimSpace(settings.APIKeyEnv)
-	if name == "" {
-		return "", nil
-	}
-	return strings.TrimSpace(os.Getenv(name)), nil
-}
-
 func requiredAPIKey(settings domain.ProviderSettings, provider domain.Provider) (string, error) {
-	name := strings.TrimSpace(settings.APIKeyEnv)
-	if name == "" {
-		return "", fmt.Errorf("%s API key env is not configured", provider.DisplayName())
-	}
-	apiKey := strings.TrimSpace(os.Getenv(name))
+	apiKey := strings.TrimSpace(settings.APIKey)
 	if apiKey == "" {
-		return "", fmt.Errorf("%s API key env %s is not set", provider.DisplayName(), name)
+		return "", fmt.Errorf("%s API key is not configured", provider.DisplayName())
 	}
 	return apiKey, nil
 }
 
-type reasoningConfig struct {
-	Fallback         bool
-	ReasoningByModel map[string]bool
-}
-
-func resolveReasoningConfig() (reasoningConfig, error) {
-	config := reasoningConfig{
-		Fallback: true,
-	}
-
-	if raw := strings.TrimSpace(os.Getenv(reasoningFallbackEnv)); raw != "" {
-		switch strings.ToLower(raw) {
-		case "1", "true", "yes", "on":
-			config.Fallback = true
-		case "0", "false", "no", "off":
-			config.Fallback = false
-		default:
-			return reasoningConfig{}, fmt.Errorf("parse %s: unsupported bool value %q", reasoningFallbackEnv, raw)
-		}
-	}
-
-	if raw := strings.TrimSpace(os.Getenv(reasoningByModelEnv)); raw != "" {
-		parsed := map[string]bool{}
-		if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-			return reasoningConfig{}, fmt.Errorf("parse %s as JSON object map[string]bool: %w", reasoningByModelEnv, err)
-		}
-		config.ReasoningByModel = parsed
-	}
-
-	return config, nil
-}
-
-func (c reasoningConfig) useReasoningFallback(model string) bool {
-	if len(c.ReasoningByModel) == 0 {
-		return c.Fallback
-	}
-
-	normalizedModel := strings.ToLower(strings.TrimSpace(model))
-	selected := c.Fallback
-	bestLen := -1
-	for pattern, enabled := range c.ReasoningByModel {
-		normalizedPattern := strings.ToLower(strings.TrimSpace(pattern))
-		if normalizedPattern == "" {
-			continue
-		}
-		if !strings.Contains(normalizedModel, normalizedPattern) {
-			continue
-		}
-		if len(normalizedPattern) > bestLen {
-			bestLen = len(normalizedPattern)
-			selected = enabled
-		}
-	}
-
-	return selected
-}
-
-func readOpenAICompatibleStream(response *http.Response, model string, config reasoningConfig, onDelta DeltaHandler) (ChatResult, error) {
-	scanner := bufio.NewScanner(response.Body)
-	scanner.Buffer(make([]byte, 0, 4096), 1024*1024)
-
+func readOpenAICompatibleStream(response *http.Response, onDelta DeltaHandler) (ChatResult, error) {
 	var content strings.Builder
 	var reasoning strings.Builder
 	toolCalls := map[int]domain.ToolCall{}
 	finishReason := ""
 	usage := domain.UsageStats{}
 
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, ":") {
-			continue
-		}
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "[DONE]" {
-			break
-		}
-
-		var envelope streamEnvelope
-		if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
-			return ChatResult{}, fmt.Errorf("decode stream payload: %w", err)
-		}
-
-		if envelope.Usage.TotalTokens > 0 || envelope.Usage.PromptTokens > 0 || envelope.Usage.CompletionTokens > 0 {
-			usage = domain.UsageStats{
-				PromptTokens:     envelope.Usage.PromptTokens,
-				CompletionTokens: envelope.Usage.CompletionTokens,
-				TotalTokens:      envelope.Usage.TotalTokens,
-			}
-		}
-
-		for _, choice := range envelope.Choices {
-			reasoningChunk := choice.Delta.ReasoningContent
-			if reasoningChunk == "" && config.useReasoningFallback(model) {
-				reasoningChunk = choice.Delta.Reasoning
-			}
-			if reasoningChunk != "" {
-				reasoning.WriteString(reasoningChunk)
-				if onDelta != nil {
-					if err := onDelta(Delta{Reasoning: reasoningChunk}); err != nil {
-						return ChatResult{}, err
-					}
-				}
-			}
-
-			if choice.Delta.Content != "" {
-				content.WriteString(choice.Delta.Content)
-				if onDelta != nil {
-					if err := onDelta(Delta{Content: choice.Delta.Content}); err != nil {
-						return ChatResult{}, err
-					}
-				}
-			}
-
-			for _, toolDelta := range choice.Delta.ToolCalls {
-				call := toolCalls[toolDelta.Index]
-				if call.ID == "" && toolDelta.ID != "" {
-					call.ID = toolDelta.ID
-				}
-				if call.Name == "" && toolDelta.Function.Name != "" {
-					call.Name = toolDelta.Function.Name
-				}
-				call.Arguments += toolDelta.Function.Arguments
-				toolCalls[toolDelta.Index] = call
-			}
-
-			if choice.FinishReason != "" {
-				finishReason = choice.FinishReason
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
+	err := scanStreamLines(response.Body, streamScanOptions{
+		AllowComments:   true,
+		RequireDataLine: true,
+	}, func(payload string) error {
+		return applyOpenAICompatibleChunk(payload, onDelta, &content, &reasoning, toolCalls, &finishReason, &usage)
+	})
+	if err != nil {
 		return ChatResult{}, fmt.Errorf("read stream: %w", err)
 	}
 
+	return ChatResult{
+		Content:      content.String(),
+		Reasoning:    reasoning.String(),
+		ToolCalls:    orderedToolCalls(toolCalls),
+		FinishReason: finishReason,
+		Usage:        usage,
+	}, nil
+}
+
+func applyOpenAICompatibleChunk(
+	payload string,
+	onDelta DeltaHandler,
+	content *strings.Builder,
+	reasoning *strings.Builder,
+	toolCalls map[int]domain.ToolCall,
+	finishReason *string,
+	usage *domain.UsageStats,
+) error {
+	envelope, err := decodeOpenAICompatibleEnvelope(payload)
+	if err != nil {
+		return err
+	}
+	mergeOpenAIUsage(usage, envelope.Usage)
+	for _, choice := range envelope.Choices {
+		if err := appendOpenAIReasoningDelta(onDelta, reasoning, choice); err != nil {
+			return err
+		}
+		if err := appendOpenAIContentDelta(onDelta, content, choice); err != nil {
+			return err
+		}
+		mergeOpenAIToolCalls(toolCalls, choice)
+		if choice.FinishReason != "" {
+			*finishReason = choice.FinishReason
+		}
+	}
+	return nil
+}
+
+func decodeOpenAICompatibleEnvelope(payload string) (streamEnvelope, error) {
+	var envelope streamEnvelope
+	if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
+		return streamEnvelope{}, fmt.Errorf("decode stream payload: %w", err)
+	}
+	return envelope, nil
+}
+
+func mergeOpenAIUsage(target *domain.UsageStats, usage streamUsage) {
+	if usage.TotalTokens == 0 && usage.PromptTokens == 0 && usage.CompletionTokens == 0 {
+		return
+	}
+	*target = domain.UsageStats{
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		TotalTokens:      usage.TotalTokens,
+	}
+}
+
+func appendOpenAIReasoningDelta(onDelta DeltaHandler, builder *strings.Builder, choice streamChoice) error {
+	reasoningChunk := choice.Delta.ReasoningContent
+	if reasoningChunk == "" {
+		reasoningChunk = choice.Delta.Reasoning
+	}
+	if reasoningChunk == "" {
+		return nil
+	}
+	builder.WriteString(reasoningChunk)
+	return emitDelta(onDelta, Delta{Reasoning: reasoningChunk})
+}
+
+func appendOpenAIContentDelta(onDelta DeltaHandler, builder *strings.Builder, choice streamChoice) error {
+	if choice.Delta.Content == "" {
+		return nil
+	}
+	builder.WriteString(choice.Delta.Content)
+	return emitDelta(onDelta, Delta{Content: choice.Delta.Content})
+}
+
+func mergeOpenAIToolCalls(target map[int]domain.ToolCall, choice streamChoice) {
+	for _, toolDelta := range choice.Delta.ToolCalls {
+		call := target[toolDelta.Index]
+		if call.ID == "" && toolDelta.ID != "" {
+			call.ID = toolDelta.ID
+		}
+		if call.Name == "" && toolDelta.Function.Name != "" {
+			call.Name = toolDelta.Function.Name
+		}
+		call.Arguments += toolDelta.Function.Arguments
+		target[toolDelta.Index] = call
+	}
+}
+
+func orderedToolCalls(toolCalls map[int]domain.ToolCall) []domain.ToolCall {
 	ordered := make([]domain.ToolCall, 0, len(toolCalls))
 	for index := 0; index < len(toolCalls); index++ {
 		if call, ok := toolCalls[index]; ok {
 			ordered = append(ordered, call)
 		}
 	}
+	return ordered
+}
 
-	return ChatResult{
-		Content:      content.String(),
-		Reasoning:    reasoning.String(),
-		ToolCalls:    ordered,
-		FinishReason: finishReason,
-		Usage:        usage,
-	}, nil
+func osValue(name string) string {
+	return strings.TrimSpace(getenv(name))
+}
+
+var getenv = func(name string) string {
+	return os.Getenv(name)
 }

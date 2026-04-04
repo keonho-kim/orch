@@ -26,8 +26,8 @@ func TestVLLMClientStreamsContentToolCallsAndUsage(t *testing.T) {
 
 	client := NewVLLMClient()
 	result, err := client.Chat(context.Background(), domain.ProviderSettings{
-		BaseURL: server.URL + "/v1",
-		Model:   "test-model",
+		Endpoint: server.URL + "/v1",
+		Model:    "test-model",
 	}, ChatRequest{
 		Model:    "test-model",
 		Messages: []Message{{Role: "user", Content: "hello"}},
@@ -59,8 +59,8 @@ func TestOllamaClientStreamsReasoningAndUsage(t *testing.T) {
 
 	client := NewOllamaClient()
 	result, err := client.Chat(context.Background(), domain.ProviderSettings{
-		BaseURL: server.URL + "/v1",
-		Model:   "test-model",
+		Endpoint: server.URL + "/v1",
+		Model:    "test-model",
 	}, ChatRequest{
 		Model:    "test-model",
 		Messages: []Message{{Role: "user", Content: "hello"}},
@@ -80,54 +80,35 @@ func TestOllamaClientStreamsReasoningAndUsage(t *testing.T) {
 	}
 }
 
-func TestOllamaClientAppliesModelThinkProfile(t *testing.T) {
+func TestOllamaClientAppliesConfiguredReasoning(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name      string
-		model     string
-		wantThink bool
-	}{
-		{name: "qwen35", model: "qwen3.5-coder:32b", wantThink: true},
-		{name: "deepseek", model: "deepseek-r1:32b", wantThink: true},
-		{name: "gemma4", model: "gemma-4-27b-it", wantThink: true},
-		{name: "glm", model: "glm-4.5", wantThink: true},
-		{name: "other", model: "llama3.1:8b", wantThink: false},
-	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if got := payload["think"]; got != "high" {
+			t.Fatalf("unexpected think payload: %+v", payload)
+		}
 
-	for _, test := range tests {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		_, _ = io.WriteString(w, "{\"message\":{\"content\":\"ok\"},\"done\":false}\n")
+		_, _ = io.WriteString(w, "{\"done\":true,\"done_reason\":\"stop\",\"prompt_eval_count\":1,\"eval_count\":1}\n")
+	}))
+	defer server.Close()
 
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				var payload map[string]any
-				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-					t.Fatalf("decode request: %v", err)
-				}
-				_, hasThink := payload["think"]
-				if hasThink != test.wantThink {
-					t.Fatalf("unexpected think field presence for model %s: payload=%+v", test.model, payload)
-				}
-
-				w.Header().Set("Content-Type", "application/x-ndjson")
-				_, _ = io.WriteString(w, "{\"message\":{\"content\":\"ok\"},\"done\":false}\n")
-				_, _ = io.WriteString(w, "{\"done\":true,\"done_reason\":\"stop\",\"prompt_eval_count\":1,\"eval_count\":1}\n")
-			}))
-			defer server.Close()
-
-			client := NewOllamaClient()
-			_, err := client.Chat(context.Background(), domain.ProviderSettings{
-				BaseURL: server.URL + "/v1",
-				Model:   test.model,
-			}, ChatRequest{
-				Model:    test.model,
-				Messages: []Message{{Role: "user", Content: "hello"}},
-			}, nil)
-			if err != nil {
-				t.Fatalf("chat: %v", err)
-			}
-		})
+	client := NewOllamaClient()
+	_, err := client.Chat(context.Background(), domain.ProviderSettings{
+		Endpoint:  server.URL + "/v1",
+		Model:     "qwen3.5-coder:32b",
+		Reasoning: "high",
+	}, ChatRequest{
+		Model:    "qwen3.5-coder:32b",
+		Messages: []Message{{Role: "user", Content: "hello"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("chat: %v", err)
 	}
 }
 

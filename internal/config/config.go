@@ -11,7 +11,7 @@ import (
 const (
 	runtimeAssetDirName = "runtime-asset"
 	bootstrapDirName    = "bootstrap"
-	settingsFileName    = "orch.settings.json"
+	settingsFileName    = "orch.toml"
 	testWorkspaceName   = "test-workspace"
 	localStateDirName   = ".orch"
 	sessionsDirName     = "sessions"
@@ -20,44 +20,57 @@ const (
 )
 
 type Paths struct {
-	RepoRoot            string
-	RuntimeAssetDir     string
-	BootstrapAssets     string
-	SettingsFile        string
-	ProjectSettingsFile string
-	UserSettingsFile    string
-	LocalSettingsFile   string
-	ManagedSettingsFile string
-	UserConfigDir       string
-	DBPath              string
-	TestWorkspace       string
-	LocalStateDir       string
-	APIDir              string
-	SessionsDir         string
+	RepoRoot                  string
+	RuntimeAssetDir           string
+	BootstrapAssets           string
+	ConfigFile                string
+	LegacyProjectSettingsFile string
+	LegacyUserSettingsFile    string
+	LegacyLocalSettingsFile   string
+	LegacyManagedSettingsFile string
+	UserConfigDir             string
+	DBPath                    string
+	TestWorkspace             string
+	LocalStateDir             string
+	APIDir                    string
+	SessionsDir               string
 }
 
 func ResolvePaths(repoRoot string) (Paths, error) {
+	return ResolvePathsWithConfigFile(repoRoot, "")
+}
+
+func ResolvePathsWithConfigFile(repoRoot string, configFile string) (Paths, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return Paths{}, fmt.Errorf("resolve user config dir: %w", err)
 	}
 
 	userConfigDir := filepath.Join(configDir, appDirName)
+	resolvedConfigFile := filepath.Join(repoRoot, settingsFileName)
+	if configFile != "" {
+		if filepath.IsAbs(configFile) {
+			resolvedConfigFile = filepath.Clean(configFile)
+		} else {
+			resolvedConfigFile = filepath.Join(repoRoot, configFile)
+		}
+	}
+
 	return Paths{
-		RepoRoot:            repoRoot,
-		RuntimeAssetDir:     filepath.Join(repoRoot, runtimeAssetDirName),
-		BootstrapAssets:     filepath.Join(repoRoot, runtimeAssetDirName, bootstrapDirName),
-		SettingsFile:        filepath.Join(repoRoot, settingsFileName),
-		ProjectSettingsFile: filepath.Join(repoRoot, settingsFileName),
-		UserSettingsFile:    filepath.Join(userConfigDir, "settings.json"),
-		LocalSettingsFile:   filepath.Join(repoRoot, localStateDirName, "settings.local.json"),
-		ManagedSettingsFile: managedSettingsPath(),
-		UserConfigDir:       userConfigDir,
-		DBPath:              filepath.Join(userConfigDir, dbFileName),
-		TestWorkspace:       filepath.Join(repoRoot, testWorkspaceName),
-		LocalStateDir:       filepath.Join(repoRoot, localStateDirName),
-		APIDir:              filepath.Join(repoRoot, localStateDirName, "api"),
-		SessionsDir:         filepath.Join(repoRoot, localStateDirName, sessionsDirName),
+		RepoRoot:                  repoRoot,
+		RuntimeAssetDir:           filepath.Join(repoRoot, runtimeAssetDirName),
+		BootstrapAssets:           filepath.Join(repoRoot, runtimeAssetDirName, bootstrapDirName),
+		ConfigFile:                resolvedConfigFile,
+		LegacyProjectSettingsFile: filepath.Join(repoRoot, "orch.settings.json"),
+		LegacyUserSettingsFile:    filepath.Join(userConfigDir, "settings.json"),
+		LegacyLocalSettingsFile:   filepath.Join(repoRoot, localStateDirName, "settings.local.json"),
+		LegacyManagedSettingsFile: managedSettingsPath(),
+		UserConfigDir:             userConfigDir,
+		DBPath:                    filepath.Join(userConfigDir, dbFileName),
+		TestWorkspace:             filepath.Join(repoRoot, testWorkspaceName),
+		LocalStateDir:             filepath.Join(repoRoot, localStateDirName),
+		APIDir:                    filepath.Join(repoRoot, localStateDirName, "api"),
+		SessionsDir:               filepath.Join(repoRoot, localStateDirName, sessionsDirName),
 	}, nil
 }
 
@@ -71,30 +84,14 @@ func EnsureRuntimePaths(paths Paths) error {
 	return nil
 }
 
-func EnsureSettingsFile(paths Paths) error {
-	if _, err := os.Stat(paths.ProjectSettingsFile); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat settings file: %w", err)
-	}
-
-	return SaveSettings(paths, defaultSettings())
-}
-
 func LoadSettings(paths Paths) (domain.Settings, error) {
-	resolved, err := LoadResolvedSettings(paths)
+	state, err := LoadConfigState(paths)
 	if err != nil {
 		return domain.Settings{}, err
 	}
-	return resolved.Effective, nil
+	return state.Settings, nil
 }
 
 func SaveSettings(paths Paths, settings domain.Settings) error {
-	return SaveScopeSettings(paths, ScopeProject, ScopeSettingsFromDomainSettings(settings))
-}
-
-func defaultSettings() domain.Settings {
-	settings := domain.Settings{}
-	settings.Normalize()
-	return settings
+	return SaveDocument(paths, DocumentFromSettings(settings))
 }

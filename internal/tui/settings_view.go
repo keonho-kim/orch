@@ -16,13 +16,9 @@ func (m Model) renderSettingsLines(width int) []string {
 	lines := []string{
 		sectionHeader("SETTINGS", maxWidth),
 		"",
-		fitLine("Tab/Shift+Tab: Change Scope", maxWidth),
 		fitLine("Up/Down: Move Between Fields", maxWidth),
 		fitLine("Left/Right: Change Focused Value", maxWidth),
-		fitLine("Ctrl+U: Inherit Focused Field", maxWidth),
 		fitLine("Enter: Save  Esc: Cancel", maxWidth),
-		"",
-		fitLine(m.renderSettingsScopeTabs(), maxWidth),
 		"",
 	}
 
@@ -84,20 +80,11 @@ func (m Model) renderSettingsField(field settingsField) string {
 			selectedProvider = m.settings.form.pendingProvider()
 		}
 		value := renderSettingsProviderSelector(selectedProvider)
-		if m.settings.form.isEditable() && !m.settings.form.providerSet {
-			value += "  (inherited)"
-		}
 		return prefix + label + ": " + value + suffix
 	case settingsFieldKindToggle:
 		value := onOffLabel(m.settings.form.displaySelfDriving())
-		if m.settings.form.isEditable() && !m.settings.form.selfDrivingSet {
-			value = "Inherited: " + value
-		}
 		return prefix + label + ": " + value + suffix
 	default:
-		if !m.settings.form.isEditable() {
-			return prefix + label + ": " + m.settings.form.fieldDisplayValue(field) + suffix
-		}
 		return prefix + label + ": " + m.settings.form.inputs[field].View() + suffix
 	}
 }
@@ -108,14 +95,6 @@ func renderSettingsProviderSelector(provider domain.Provider) string {
 		options = append(options, renderProviderOption(candidate.DisplayName(), provider == candidate))
 	}
 	return strings.Join(options, "  ")
-}
-
-func (m Model) renderSettingsScopeTabs() string {
-	tabs := make([]string, 0, len(settingsScopeOrder))
-	for _, scope := range settingsScopeOrder {
-		tabs = append(tabs, renderProviderOption(settingsScopeLabel(scope), m.settings.scope == scope))
-	}
-	return strings.Join(tabs, "  ")
 }
 
 func onOffLabel(enabled bool) string {
@@ -142,7 +121,7 @@ func (m Model) renderSettingsSetupLines(width int) []string {
 			"",
 			fitLine("Choose the provider for the first launch.", maxWidth),
 			fitLine("Left/Right or Up/Down: switch provider", maxWidth),
-			fitLine("Enter: continue (saved to User scope)", maxWidth),
+			fitLine("Enter: continue", maxWidth),
 			"",
 		}
 		for _, provider := range domain.Providers() {

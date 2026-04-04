@@ -56,51 +56,9 @@ func TestResolveSelectedSkillsRejectsUnknownSkill(t *testing.T) {
 func TestBuildIterationContextIncludesSelectedSkillsAndChatHistory(t *testing.T) {
 	t.Parallel()
 
-	repoRoot := t.TempDir()
-	paths, err := config.ResolvePaths(repoRoot)
-	if err != nil {
-		t.Fatalf("resolve paths: %v", err)
-	}
-	manager := session.NewManager(paths.SessionsDir)
-	service := &Service{
-		ctx:      context.Background(),
-		paths:    paths,
-		sessions: session.NewService(manager, nil),
-	}
-	if err := os.MkdirAll(paths.SessionsDir, 0o755); err != nil {
-		t.Fatalf("mkdir sessions dir: %v", err)
-	}
-	if err := service.sessions.SaveMetadata(domain.SessionMetadata{
-		SessionID:     "S1",
-		WorkspacePath: paths.TestWorkspace,
-		WorkerRole:    domain.AgentRoleGateway,
-		TaskStatus:    "running",
-	}); err != nil {
-		t.Fatalf("save session metadata: %v", err)
-	}
-
-	for relative, content := range map[string]string{
-		"AGENTS.md":                            "agents",
-		filepath.Join("bootstrap", "USER.md"):  "user note",
-		filepath.Join("bootstrap", "TOOLS.md"): "tools guide",
-	} {
-		path := filepath.Join(paths.TestWorkspace, relative)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", relative, err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			t.Fatalf("write %s: %v", relative, err)
-		}
-	}
-	if err := manager.AppendChatHistory(session.ChatHistoryEntry{
-		CreatedAt: time.Now(),
-		SessionID: "S1",
-		RunID:     "R1",
-		Speaker:   session.ChatHistorySpeakerAssistant,
-		Summary:   "recent shared memory",
-	}); err != nil {
-		t.Fatalf("append chat history: %v", err)
-	}
+	service, paths := newIterationContextTestService(t)
+	writeIterationContextFixtures(t, paths)
+	appendIterationContextHistory(t, paths.SessionsDir)
 
 	context, err := service.buildIterationContext(domain.RunRecord{
 		Mode:          domain.RunModeReact,
@@ -116,7 +74,69 @@ func TestBuildIterationContextIncludesSelectedSkillsAndChatHistory(t *testing.T)
 	if err != nil {
 		t.Fatalf("build iteration context: %v", err)
 	}
+	assertIterationContextContains(t, context)
+}
 
+func newIterationContextTestService(t *testing.T) (*Service, config.Paths) {
+	t.Helper()
+	repoRoot := t.TempDir()
+	paths, err := config.ResolvePaths(repoRoot)
+	if err != nil {
+		t.Fatalf("resolve paths: %v", err)
+	}
+	manager := session.NewManager(paths.SessionsDir)
+	service := &Service{
+		ctx:      context.Background(),
+		paths:    paths,
+		sessions: session.NewService(manager),
+	}
+	if err := os.MkdirAll(paths.SessionsDir, 0o755); err != nil {
+		t.Fatalf("mkdir sessions dir: %v", err)
+	}
+	if err := service.sessions.SaveMetadata(domain.SessionMetadata{
+		SessionID:     "S1",
+		WorkspacePath: paths.TestWorkspace,
+		WorkerRole:    domain.AgentRoleGateway,
+		TaskStatus:    "running",
+	}); err != nil {
+		t.Fatalf("save session metadata: %v", err)
+	}
+	return service, paths
+}
+
+func writeIterationContextFixtures(t *testing.T, paths config.Paths) {
+	t.Helper()
+	for relative, content := range map[string]string{
+		"AGENTS.md":                            "agents",
+		filepath.Join("bootstrap", "USER.md"):  "user note",
+		filepath.Join("bootstrap", "TOOLS.md"): "tools guide",
+	} {
+		path := filepath.Join(paths.TestWorkspace, relative)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", relative, err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", relative, err)
+		}
+	}
+}
+
+func appendIterationContextHistory(t *testing.T, sessionsDir string) {
+	t.Helper()
+	manager := session.NewManager(sessionsDir)
+	if err := manager.AppendChatHistory(session.ChatHistoryEntry{
+		CreatedAt: time.Now(),
+		SessionID: "S1",
+		RunID:     "R1",
+		Speaker:   session.ChatHistorySpeakerAssistant,
+		Summary:   "recent shared memory",
+	}); err != nil {
+		t.Fatalf("append chat history: %v", err)
+	}
+}
+
+func assertIterationContextContains(t *testing.T, context string) {
+	t.Helper()
 	if !strings.Contains(context, "Selected skill content for this call:") {
 		t.Fatalf("expected selected skill content in context, got %q", context)
 	}

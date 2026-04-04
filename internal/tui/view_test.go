@@ -201,8 +201,8 @@ func testModel(width int, height int) Model {
 		DefaultProvider: domain.ProviderOllama,
 		Providers: domain.ProviderCatalog{
 			Ollama: domain.ProviderSettings{
-				BaseURL: "http://localhost:11434/v1",
-				Model:   "qwen2.5-coder",
+				Endpoint: "http://localhost:11434/v1",
+				Model:    "qwen2.5-coder",
 			},
 		},
 	}

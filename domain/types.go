@@ -35,49 +35,15 @@ func (p Provider) String() string {
 }
 
 func (p Provider) DisplayName() string {
-	switch p {
-	case ProviderOllama:
-		return "Ollama"
-	case ProviderVLLM:
-		return "vLLM"
-	case ProviderGemini:
-		return "Gemini"
-	case ProviderVertex:
-		return "Vertex"
-	case ProviderBedrock:
-		return "Bedrock"
-	case ProviderClaude:
-		return "Claude"
-	case ProviderAzure:
-		return "Azure"
-	case ProviderChatGPT:
-		return "ChatGPT"
-	default:
-		return strings.ToUpper(string(p))
-	}
+	return MustProviderCatalog(p).DisplayName
 }
 
 func ParseProvider(value string) (Provider, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case string(ProviderOllama):
-		return ProviderOllama, nil
-	case string(ProviderVLLM):
-		return ProviderVLLM, nil
-	case string(ProviderGemini):
-		return ProviderGemini, nil
-	case string(ProviderVertex):
-		return ProviderVertex, nil
-	case string(ProviderBedrock):
-		return ProviderBedrock, nil
-	case string(ProviderClaude):
-		return ProviderClaude, nil
-	case string(ProviderAzure):
-		return ProviderAzure, nil
-	case string(ProviderChatGPT):
-		return ProviderChatGPT, nil
-	default:
-		return "", fmt.Errorf("unsupported provider %q", value)
+	normalized := Provider(strings.ToLower(strings.TrimSpace(value)))
+	if _, ok := ProviderCatalogFor(normalized); ok {
+		return normalized, nil
 	}
+	return "", fmt.Errorf("unsupported provider %q", value)
 }
 
 func Providers() []Provider {
@@ -168,13 +134,14 @@ const (
 )
 
 type ProviderSettings struct {
-	BaseURL   string `json:"base_url"`
+	Endpoint  string `json:"endpoint"`
 	Model     string `json:"model"`
-	APIKeyEnv string `json:"api_key_env,omitempty"`
+	APIKey    string `json:"api_key,omitempty"`
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
-func (s ProviderSettings) NormalizedBaseURL() string {
-	return strings.TrimRight(strings.TrimSpace(s.BaseURL), "/")
+func (s ProviderSettings) NormalizedEndpoint() string {
+	return strings.TrimRight(strings.TrimSpace(s.Endpoint), "/")
 }
 
 type ProviderCatalog struct {
@@ -199,44 +166,15 @@ type Settings struct {
 }
 
 func (s *Settings) Normalize() {
-	if strings.TrimSpace(s.Providers.Ollama.BaseURL) == "" {
-		s.Providers.Ollama.BaseURL = "http://localhost:11434/v1"
-	}
-	if strings.TrimSpace(s.Providers.VLLM.BaseURL) == "" {
-		s.Providers.VLLM.BaseURL = "http://localhost:8000/v1"
-	}
-	if strings.TrimSpace(s.Providers.VLLM.APIKeyEnv) == "" {
-		s.Providers.VLLM.APIKeyEnv = "VLLM_API_KEY"
-	}
-	if strings.TrimSpace(s.Providers.Gemini.BaseURL) == "" {
-		s.Providers.Gemini.BaseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
-	}
-	if strings.TrimSpace(s.Providers.Gemini.APIKeyEnv) == "" {
-		s.Providers.Gemini.APIKeyEnv = "GEMINI_API_KEY"
-	}
-	if strings.TrimSpace(s.Providers.Vertex.BaseURL) == "" {
-		s.Providers.Vertex.BaseURL = "https://aiplatform.googleapis.com/v1"
-	}
-	if strings.TrimSpace(s.Providers.Vertex.APIKeyEnv) == "" {
-		s.Providers.Vertex.APIKeyEnv = "GOOGLE_API_KEY"
-	}
-	if strings.TrimSpace(s.Providers.Bedrock.APIKeyEnv) == "" {
-		s.Providers.Bedrock.APIKeyEnv = "AWS_BEARER_TOKEN_BEDROCK"
-	}
-	if strings.TrimSpace(s.Providers.Claude.BaseURL) == "" {
-		s.Providers.Claude.BaseURL = "https://api.anthropic.com/v1"
-	}
-	if strings.TrimSpace(s.Providers.Claude.APIKeyEnv) == "" {
-		s.Providers.Claude.APIKeyEnv = "ANTHROPIC_API_KEY"
-	}
-	if strings.TrimSpace(s.Providers.Azure.APIKeyEnv) == "" {
-		s.Providers.Azure.APIKeyEnv = "AZURE_OPENAI_API_KEY"
-	}
-	if strings.TrimSpace(s.Providers.ChatGPT.BaseURL) == "" {
-		s.Providers.ChatGPT.BaseURL = "https://api.openai.com/v1"
-	}
-	if strings.TrimSpace(s.Providers.ChatGPT.APIKeyEnv) == "" {
-		s.Providers.ChatGPT.APIKeyEnv = "OPENAI_API_KEY"
+	for _, provider := range Providers() {
+		spec := MustProviderCatalog(provider)
+		current := s.Providers.Provider(provider)
+		if strings.TrimSpace(current.Endpoint) == "" && strings.TrimSpace(spec.DefaultEndpoint) != "" {
+			current.Endpoint = spec.DefaultEndpoint
+		}
+		if normalized, err := ParseReasoningValue(current.Reasoning); err == nil {
+			current.Reasoning = normalized
+		}
 	}
 	if s.ApprovalPolicy == "" {
 		s.ApprovalPolicy = ApprovalConfirmMutations
@@ -253,26 +191,7 @@ func (s *Settings) Normalize() {
 }
 
 func (s Settings) ConfigFor(provider Provider) ProviderSettings {
-	switch provider {
-	case ProviderOllama:
-		return s.Providers.Ollama
-	case ProviderVLLM:
-		return s.Providers.VLLM
-	case ProviderGemini:
-		return s.Providers.Gemini
-	case ProviderVertex:
-		return s.Providers.Vertex
-	case ProviderBedrock:
-		return s.Providers.Bedrock
-	case ProviderClaude:
-		return s.Providers.Claude
-	case ProviderAzure:
-		return s.Providers.Azure
-	case ProviderChatGPT:
-		return s.Providers.ChatGPT
-	default:
-		return ProviderSettings{}
-	}
+	return *s.Providers.Provider(provider)
 }
 
 func (s Settings) HasProviderModel(provider Provider) bool {
@@ -283,16 +202,17 @@ func (s Settings) MissingProviderFields(provider Provider) []string {
 	normalized := s
 	normalized.Normalize()
 	config := normalized.ConfigFor(provider)
+	spec := MustProviderCatalog(provider)
 
 	missing := make([]string, 0, 3)
-	if providerRequiresBaseURL(provider) && strings.TrimSpace(config.BaseURL) == "" {
-		missing = append(missing, "Base URL")
+	if spec.RequiresEndpoint && strings.TrimSpace(config.Endpoint) == "" {
+		missing = append(missing, "Endpoint")
 	}
-	if providerRequiresModel(provider) && strings.TrimSpace(config.Model) == "" {
+	if spec.RequiresModel && strings.TrimSpace(config.Model) == "" {
 		missing = append(missing, "Model")
 	}
-	if providerRequiresAPIKeyEnv(provider) && strings.TrimSpace(config.APIKeyEnv) == "" {
-		missing = append(missing, "API Key Env")
+	if spec.RequiresAPIKey && strings.TrimSpace(config.APIKey) == "" {
+		missing = append(missing, "API Key")
 	}
 	return missing
 }
@@ -310,65 +230,6 @@ func (s Settings) ProviderConfigError(provider Provider) error {
 		return fmt.Errorf("model is not configured for %s", provider.DisplayName())
 	}
 	return fmt.Errorf("%s is not configured; missing %s", provider.DisplayName(), strings.Join(missing, ", "))
-}
-
-func (s Settings) SecretEnvNames() []string {
-	normalized := s
-	normalized.Normalize()
-
-	seen := make(map[string]struct{})
-	names := make([]string, 0, len(providerOrder))
-	for _, provider := range providerOrder {
-		name := strings.TrimSpace(normalized.ConfigFor(provider).APIKeyEnv)
-		if name == "" {
-			continue
-		}
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		seen[name] = struct{}{}
-		names = append(names, name)
-	}
-	return names
-}
-
-func providerRequiresBaseURL(provider Provider) bool {
-	switch provider {
-	case ProviderBedrock, ProviderAzure:
-		return true
-	default:
-		return false
-	}
-}
-
-func providerRequiresModel(provider Provider) bool {
-	switch provider {
-	case ProviderOllama,
-		ProviderVLLM,
-		ProviderGemini,
-		ProviderVertex,
-		ProviderBedrock,
-		ProviderClaude,
-		ProviderAzure,
-		ProviderChatGPT:
-		return true
-	default:
-		return false
-	}
-}
-
-func providerRequiresAPIKeyEnv(provider Provider) bool {
-	switch provider {
-	case ProviderGemini,
-		ProviderVertex,
-		ProviderBedrock,
-		ProviderClaude,
-		ProviderAzure,
-		ProviderChatGPT:
-		return true
-	default:
-		return false
-	}
 }
 
 type MessageHistoryEntry struct {

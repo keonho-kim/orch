@@ -42,12 +42,36 @@ func FormatOTPointerForSession(sessionID string, lines []int64) string {
 
 func ParseOTPointer(value string) (OTPointer, error) {
 	trimmed := strings.TrimSpace(value)
-	var pointer OTPointer
+	pointer, err := parseOTPointerHeader(trimmed)
+	if err != nil {
+		return OTPointer{}, err
+	}
+	queryPart, found := otPointerQuery(trimmed)
+	if !found {
+		return OTPointer{}, fmt.Errorf("ot pointer query is required")
+	}
+	values, err := url.ParseQuery(queryPart)
+	if err != nil {
+		return OTPointer{}, fmt.Errorf("decode ot pointer query: %w", err)
+	}
+	lines, err := parseOTPointerLines(values.Get("lines"))
+	if err != nil {
+		return OTPointer{}, err
+	}
+	if len(lines) == 0 {
+		return OTPointer{}, fmt.Errorf("ot pointer lines are required")
+	}
+	pointer.Lines = lines
+	return pointer, nil
+}
+
+func parseOTPointerHeader(trimmed string) (OTPointer, error) {
 	switch {
 	case strings.HasPrefix(trimmed, otPointerCurrentScheme):
 		if suffix := strings.TrimPrefix(trimmed, otPointerCurrentScheme); strings.HasPrefix(suffix, "/") {
 			return OTPointer{}, fmt.Errorf("cross-session ot pointers are not supported in current-session form")
 		}
+		return OTPointer{}, nil
 	case strings.HasPrefix(trimmed, otPointerSessionPrefix):
 		sessionPart := strings.TrimPrefix(trimmed, otPointerSessionPrefix)
 		sessionPart, _, _ = strings.Cut(sessionPart, "?")
@@ -55,52 +79,50 @@ func ParseOTPointer(value string) (OTPointer, error) {
 		if err != nil || strings.TrimSpace(sessionID) == "" || strings.Contains(sessionID, "/") {
 			return OTPointer{}, fmt.Errorf("invalid ot pointer session")
 		}
-		pointer.SessionID = sessionID
+		return OTPointer{SessionID: sessionID}, nil
 	default:
 		return OTPointer{}, fmt.Errorf("invalid ot pointer")
 	}
+}
 
-	queryPart := ""
+func otPointerQuery(trimmed string) (string, bool) {
 	if strings.HasPrefix(trimmed, otPointerCurrentScheme) {
-		queryPart = strings.TrimPrefix(trimmed, otPointerCurrentScheme)
-	} else {
-		_, queryPart, _ = strings.Cut(trimmed, "?")
-		queryPart = "?" + queryPart
+		queryPart := strings.TrimPrefix(trimmed, otPointerCurrentScheme)
+		return strings.TrimPrefix(queryPart, "?"), strings.Contains(trimmed, "?")
 	}
-	queryPart = strings.TrimPrefix(queryPart, "?")
-	_, _, found := strings.Cut(trimmed, "?")
-	if !found {
-		return OTPointer{}, fmt.Errorf("ot pointer query is required")
-	}
+	_, queryPart, found := strings.Cut(trimmed, "?")
+	return queryPart, found
+}
 
-	values, err := url.ParseQuery(queryPart)
-	if err != nil {
-		return OTPointer{}, fmt.Errorf("decode ot pointer query: %w", err)
-	}
-	rawLines := strings.TrimSpace(values.Get("lines"))
+func parseOTPointerLines(raw string) ([]int64, error) {
+	rawLines := strings.TrimSpace(raw)
 	if rawLines == "" {
-		return OTPointer{}, fmt.Errorf("ot pointer lines are required")
+		return nil, fmt.Errorf("ot pointer lines are required")
 	}
-
 	lines := make([]int64, 0)
 	for _, token := range strings.Split(rawLines, ",") {
-		token = strings.TrimSpace(token)
-		if token == "" {
+		line, ok := parseOTPointerLine(token)
+		if !ok {
 			continue
 		}
-		line, err := strconv.ParseInt(token, 10, 64)
-		if err != nil || line <= 0 {
-			return OTPointer{}, fmt.Errorf("invalid ot pointer line %q", token)
+		if line <= 0 {
+			return nil, fmt.Errorf("invalid ot pointer line %q", strings.TrimSpace(token))
 		}
 		lines = append(lines, line)
 	}
+	return normalizePointerLines(lines), nil
+}
 
-	lines = normalizePointerLines(lines)
-	if len(lines) == 0 {
-		return OTPointer{}, fmt.Errorf("ot pointer lines are required")
+func parseOTPointerLine(token string) (int64, bool) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return 0, false
 	}
-	pointer.Lines = lines
-	return pointer, nil
+	line, err := strconv.ParseInt(token, 10, 64)
+	if err != nil {
+		return -1, true
+	}
+	return line, true
 }
 
 func normalizePointerLines(lines []int64) []int64 {

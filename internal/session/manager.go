@@ -76,7 +76,9 @@ func (m *Manager) AppendRecord(sessionID string, record domain.SessionRecord) er
 	if err != nil {
 		return fmt.Errorf("open session record file: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	data, err := json.Marshal(record)
 	if err != nil {
@@ -100,7 +102,9 @@ func (m *Manager) LoadRecords(sessionID string) ([]domain.SessionRecord, error) 
 	if err != nil {
 		return nil, fmt.Errorf("open session record file: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 4096), 4*1024*1024)

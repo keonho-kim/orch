@@ -78,7 +78,7 @@ func TestOpenNewSessionResetsCurrentSessionAndRuns(t *testing.T) {
 	service := &Service{
 		ctx:      context.Background(),
 		paths:    paths,
-		sessions: session.NewService(session.NewManager(paths.SessionsDir), nil),
+		sessions: session.NewService(session.NewManager(paths.SessionsDir)),
 		runs: map[string]*runState{
 			"R1": {
 				record: domain.RunRecord{RunID: "R1", Status: domain.StatusCompleted},

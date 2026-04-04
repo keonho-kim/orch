@@ -10,42 +10,20 @@ import (
 	"github.com/keonho-kim/orch/internal/config"
 )
 
-type settingsField int
+type settingsField string
 type settingsMode int
 type settingsSetupStep int
 type settingsFieldKind int
 type settingsFieldGroup int
 type ollamaURLMode int
+type providerSettingFieldKind string
 
 const (
-	fieldProvider settingsField = iota
-	fieldSelfDriving
-	fieldOllamaBaseURL
-	fieldOllamaModel
-	fieldVLLMBaseURL
-	fieldVLLMModel
-	fieldVLLMAPIKeyEnv
-	fieldGeminiBaseURL
-	fieldGeminiModel
-	fieldGeminiAPIKeyEnv
-	fieldVertexBaseURL
-	fieldVertexModel
-	fieldVertexAPIKeyEnv
-	fieldBedrockBaseURL
-	fieldBedrockModel
-	fieldBedrockAPIKeyEnv
-	fieldClaudeBaseURL
-	fieldClaudeModel
-	fieldClaudeAPIKeyEnv
-	fieldAzureBaseURL
-	fieldAzureModel
-	fieldAzureAPIKeyEnv
-	fieldChatGPTBaseURL
-	fieldChatGPTModel
-	fieldChatGPTAPIKeyEnv
-	fieldReactRalphIter
-	fieldPlanRalphIter
-	fieldCompactThreshold
+	fieldProvider         settingsField = "provider"
+	fieldSelfDriving      settingsField = "self_driving"
+	fieldReactRalphIter   settingsField = "react_ralph_iter"
+	fieldPlanRalphIter    settingsField = "plan_ralph_iter"
+	fieldCompactThreshold settingsField = "compact_threshold"
 )
 
 const (
@@ -76,10 +54,19 @@ const (
 	ollamaURLCustom
 )
 
+const (
+	providerFieldKindEndpoint  providerSettingFieldKind = "endpoint"
+	providerFieldKindModel     providerSettingFieldKind = "model"
+	providerFieldKindAPIKey    providerSettingFieldKind = "api_key"
+	providerFieldKindReasoning providerSettingFieldKind = "reasoning"
+)
+
 type settingsFieldSpec struct {
-	label string
-	kind  settingsFieldKind
-	group settingsFieldGroup
+	label             string
+	kind              settingsFieldKind
+	group             settingsFieldGroup
+	provider          domain.Provider
+	providerFieldKind providerSettingFieldKind
 }
 
 type providerChangeConfirmation struct {
@@ -87,15 +74,12 @@ type providerChangeConfirmation struct {
 }
 
 type settingsFormState struct {
-	scope          config.Scope
-	resolved       config.ResolvedSettings
-	provider       domain.Provider
-	providerSet    bool
-	selfDriving    bool
-	selfDrivingSet bool
-	focus          settingsField
-	inputs         map[settingsField]textinput.Model
-	confirmation   *providerChangeConfirmation
+	configState  config.ConfigState
+	provider     domain.Provider
+	selfDriving  bool
+	focus        settingsField
+	inputs       map[settingsField]textinput.Model
+	confirmation *providerChangeConfirmation
 }
 
 type settingsSetupState struct {
@@ -109,44 +93,14 @@ type settingsSetupState struct {
 }
 
 type settingsModalState struct {
-	visible  bool
-	mode     settingsMode
-	scope    config.Scope
-	resolved config.ResolvedSettings
-	form     settingsFormState
-	setup    settingsSetupState
+	visible     bool
+	mode        settingsMode
+	configState config.ConfigState
+	form        settingsFormState
+	setup       settingsSetupState
 }
 
-var settingsFieldOrder = []settingsField{
-	fieldSelfDriving,
-	fieldProvider,
-	fieldOllamaBaseURL,
-	fieldOllamaModel,
-	fieldVLLMBaseURL,
-	fieldVLLMModel,
-	fieldVLLMAPIKeyEnv,
-	fieldGeminiBaseURL,
-	fieldGeminiModel,
-	fieldGeminiAPIKeyEnv,
-	fieldVertexBaseURL,
-	fieldVertexModel,
-	fieldVertexAPIKeyEnv,
-	fieldBedrockBaseURL,
-	fieldBedrockModel,
-	fieldBedrockAPIKeyEnv,
-	fieldClaudeBaseURL,
-	fieldClaudeModel,
-	fieldClaudeAPIKeyEnv,
-	fieldAzureBaseURL,
-	fieldAzureModel,
-	fieldAzureAPIKeyEnv,
-	fieldChatGPTBaseURL,
-	fieldChatGPTModel,
-	fieldChatGPTAPIKeyEnv,
-	fieldReactRalphIter,
-	fieldPlanRalphIter,
-	fieldCompactThreshold,
-}
+var settingsFieldOrder = buildSettingsFieldOrder()
 
 var settingsFieldGroups = []settingsFieldGroup{
 	settingsFieldGroupGeneral,
@@ -160,79 +114,134 @@ var settingsFieldGroupTitles = map[settingsFieldGroup]string{
 	settingsFieldGroupRalph:    "RALPH LOOP",
 }
 
-var settingsFieldSpecs = map[settingsField]settingsFieldSpec{
-	fieldProvider:         {label: "Provider", kind: settingsFieldKindProvider, group: settingsFieldGroupProvider},
-	fieldSelfDriving:      {label: "Self-Driving Mode", kind: settingsFieldKindToggle, group: settingsFieldGroupGeneral},
-	fieldOllamaBaseURL:    {label: "Ollama Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldOllamaModel:      {label: "Ollama Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldVLLMBaseURL:      {label: "vLLM Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldVLLMModel:        {label: "vLLM Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldVLLMAPIKeyEnv:    {label: "vLLM API Key Env", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldGeminiBaseURL:    {label: "Gemini Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldGeminiModel:      {label: "Gemini Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldGeminiAPIKeyEnv:  {label: "Gemini API Key Env", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldVertexBaseURL:    {label: "Vertex Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldVertexModel:      {label: "Vertex Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldVertexAPIKeyEnv:  {label: "Vertex API Key Env", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldBedrockBaseURL:   {label: "Bedrock Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldBedrockModel:     {label: "Bedrock Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldBedrockAPIKeyEnv: {label: "Bedrock API Key Env", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldClaudeBaseURL:    {label: "Claude Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldClaudeModel:      {label: "Claude Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldClaudeAPIKeyEnv:  {label: "Claude API Key Env", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldAzureBaseURL:     {label: "Azure Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldAzureModel:       {label: "Azure Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldAzureAPIKeyEnv:   {label: "Azure API Key Env", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldChatGPTBaseURL:   {label: "ChatGPT Base URL", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldChatGPTModel:     {label: "ChatGPT Model", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldChatGPTAPIKeyEnv: {label: "ChatGPT API Key Env", kind: settingsFieldKindText, group: settingsFieldGroupProvider},
-	fieldReactRalphIter:   {label: "ReAct Ralph Iterations", kind: settingsFieldKindText, group: settingsFieldGroupRalph},
-	fieldPlanRalphIter:    {label: "Plan Ralph Iterations", kind: settingsFieldKindText, group: settingsFieldGroupRalph},
-	fieldCompactThreshold: {label: "Compact Threshold (k)", kind: settingsFieldKindText, group: settingsFieldGroupGeneral},
+var settingsFieldSpecs = buildSettingsFieldSpecs()
+
+func buildSettingsFieldOrder() []settingsField {
+	order := []settingsField{
+		fieldSelfDriving,
+		fieldProvider,
+	}
+	for _, provider := range domain.Providers() {
+		order = append(order,
+			providerField(provider, providerFieldKindEndpoint),
+			providerField(provider, providerFieldKindModel),
+			providerField(provider, providerFieldKindAPIKey),
+			providerField(provider, providerFieldKindReasoning),
+		)
+	}
+	order = append(order,
+		fieldReactRalphIter,
+		fieldPlanRalphIter,
+		fieldCompactThreshold,
+	)
+	return order
 }
 
-var settingsScopeOrder = []config.Scope{
-	config.ScopeEffective,
-	config.ScopeManaged,
-	config.ScopeUser,
-	config.ScopeProject,
-	config.ScopeLocal,
+func buildSettingsFieldSpecs() map[settingsField]settingsFieldSpec {
+	specs := map[settingsField]settingsFieldSpec{
+		fieldProvider:         {label: "Provider", kind: settingsFieldKindProvider, group: settingsFieldGroupProvider},
+		fieldSelfDriving:      {label: "Self-Driving Mode", kind: settingsFieldKindToggle, group: settingsFieldGroupGeneral},
+		fieldReactRalphIter:   {label: "ReAct Ralph Iterations", kind: settingsFieldKindText, group: settingsFieldGroupRalph},
+		fieldPlanRalphIter:    {label: "Plan Ralph Iterations", kind: settingsFieldKindText, group: settingsFieldGroupRalph},
+		fieldCompactThreshold: {label: "Compact Threshold (k)", kind: settingsFieldKindText, group: settingsFieldGroupGeneral},
+	}
+
+	for _, provider := range domain.Providers() {
+		for _, kind := range providerFieldKinds() {
+			specs[providerField(provider, kind)] = settingsFieldSpec{
+				label:             providerFieldLabel(provider, kind),
+				kind:              settingsFieldKindText,
+				group:             settingsFieldGroupProvider,
+				provider:          provider,
+				providerFieldKind: kind,
+			}
+		}
+	}
+
+	return specs
+}
+
+func providerFieldKinds() []providerSettingFieldKind {
+	return []providerSettingFieldKind{
+		providerFieldKindEndpoint,
+		providerFieldKindModel,
+		providerFieldKindAPIKey,
+		providerFieldKindReasoning,
+	}
+}
+
+func providerField(provider domain.Provider, kind providerSettingFieldKind) settingsField {
+	return settingsField("provider:" + provider.String() + ":" + string(kind))
+}
+
+func providerFieldLabel(provider domain.Provider, kind providerSettingFieldKind) string {
+	switch kind {
+	case providerFieldKindEndpoint:
+		return provider.DisplayName() + " Endpoint"
+	case providerFieldKindModel:
+		return provider.DisplayName() + " Model"
+	case providerFieldKindAPIKey:
+		return provider.DisplayName() + " API Key"
+	case providerFieldKindReasoning:
+		return provider.DisplayName() + " Reasoning"
+	default:
+		return provider.DisplayName()
+	}
+}
+
+func primaryProviderFieldKind(provider domain.Provider) providerSettingFieldKind {
+	switch provider {
+	case domain.ProviderGemini, domain.ProviderVertex, domain.ProviderClaude, domain.ProviderChatGPT:
+		return providerFieldKindModel
+	case domain.ProviderOllama, domain.ProviderVLLM, domain.ProviderBedrock, domain.ProviderAzure:
+		return providerFieldKindEndpoint
+	default:
+		return providerFieldKindEndpoint
+	}
 }
 
 func newSettingsModal(settings domain.Settings) settingsModalState {
-	return newSettingsModalFromResolved(resolvedSettingsForModal(settings, config.ScopeProject))
+	state := config.ConfigState{
+		Document: config.DocumentFromSettings(settings),
+		Settings: settings,
+	}
+	return newSettingsModalFromState(state)
 }
 
-func newSettingsModalFromResolved(resolved config.ResolvedSettings) settingsModalState {
+func newSettingsModalFromState(state config.ConfigState) settingsModalState {
 	return settingsModalState{
-		mode:     settingsModeForm,
-		scope:    config.ScopeProject,
-		resolved: resolved,
-		form:     newSettingsFormStateForScope(resolved, config.ScopeProject),
-		setup:    newSettingsSetupState(resolved.Effective),
+		mode:        settingsModeForm,
+		configState: state,
+		form:        newSettingsFormStateFromConfig(state),
+		setup:       newSettingsSetupState(state.Settings),
 	}
 }
 
 func newSetupSettingsModal(settings domain.Settings) settingsModalState {
-	return newSetupSettingsModalFromResolved(resolvedSettingsForModal(settings, config.ScopeUser))
+	state := config.ConfigState{
+		Document: config.DocumentFromSettings(settings),
+		Settings: settings,
+	}
+	return newSetupSettingsModalFromState(state)
 }
 
-func newSetupSettingsModalFromResolved(resolved config.ResolvedSettings) settingsModalState {
-	modal := newSettingsModalFromResolved(resolved)
+func newSetupSettingsModalFromState(state config.ConfigState) settingsModalState {
+	modal := newSettingsModalFromState(state)
 	modal.visible = true
 	modal.mode = settingsModeSetup
-	modal.scope = config.ScopeUser
-	modal.form = newSettingsFormStateForScope(resolved, config.ScopeUser)
 	return modal
 }
 
 func newSettingsFormState(settings domain.Settings) settingsFormState {
-	return newSettingsFormStateForScope(resolvedSettingsForModal(settings, config.ScopeProject), config.ScopeProject)
+	return newSettingsFormStateFromConfig(config.ConfigState{
+		Document: config.DocumentFromSettings(settings),
+		Settings: settings,
+	})
 }
 
 func newSettingsSetupState(settings domain.Settings) settingsSetupState {
 	settings.Normalize()
-	urlInput := newSettingsInput("Ollama Base URL", settings.Providers.Ollama.BaseURL)
+	urlInput := newSettingsInput("Ollama Endpoint", settings.Providers.Ollama.Endpoint)
 	if strings.TrimSpace(urlInput.Value()) == "" {
 		urlInput.SetValue("http://localhost:11434/v1")
 	}
@@ -241,7 +250,7 @@ func newSettingsSetupState(settings domain.Settings) settingsSetupState {
 		step:     settingsSetupStepProvider,
 		urlMode:  ollamaURLDefault,
 		urlInput: urlInput,
-		baseURL:  settings.Providers.Ollama.BaseURL,
+		baseURL:  settings.Providers.Ollama.Endpoint,
 	}
 }
 
@@ -377,67 +386,39 @@ func (s settingsFormState) pendingProvider() domain.Provider {
 
 func (s *settingsFormState) setProvider(provider domain.Provider) {
 	s.provider = provider
-	s.providerSet = true
 	s.ensureVisibleFocus()
 }
 
-func (s settingsFormState) providerModelField(provider domain.Provider) settingsField {
-	switch provider {
-	case domain.ProviderGemini:
-		return fieldGeminiModel
-	case domain.ProviderVertex:
-		return fieldVertexModel
-	case domain.ProviderBedrock:
-		return fieldBedrockModel
-	case domain.ProviderClaude:
-		return fieldClaudeModel
-	case domain.ProviderAzure:
-		return fieldAzureModel
-	case domain.ProviderChatGPT:
-		return fieldChatGPTModel
-	case domain.ProviderVLLM:
-		return fieldVLLMModel
-	default:
-		return fieldOllamaModel
-	}
-}
-
 func (s settingsFormState) providerPrimaryField(provider domain.Provider) settingsField {
-	switch provider {
-	case domain.ProviderVLLM:
-		return fieldVLLMBaseURL
-	case domain.ProviderGemini:
-		return fieldGeminiModel
-	case domain.ProviderVertex:
-		return fieldVertexModel
-	case domain.ProviderBedrock:
-		return fieldBedrockBaseURL
-	case domain.ProviderClaude:
-		return fieldClaudeModel
-	case domain.ProviderAzure:
-		return fieldAzureBaseURL
-	case domain.ProviderChatGPT:
-		return fieldChatGPTModel
-	default:
-		return fieldOllamaBaseURL
-	}
+	return providerField(provider, primaryProviderFieldKind(provider))
 }
 
 func (s settingsFormState) missingProviderFields(base domain.Settings, provider domain.Provider) []string {
-	_ = base
-	return s.previewResolved().Effective.MissingProviderFields(provider)
+	return s.buildSettings(base).MissingProviderFields(provider)
+}
+
+func (s settingsFormState) fieldLocked(settingsField) bool {
+	return false
+}
+
+func (s settingsFormState) displayProvider() domain.Provider {
+	return s.provider
+}
+
+func (s settingsFormState) displaySelfDriving() bool {
+	return s.selfDriving
 }
 
 func describeMissingProviderFields(provider domain.Provider, missing []string) string {
 	labels := make([]string, 0, len(missing))
 	for _, field := range missing {
 		switch field {
-		case "Base URL":
-			labels = append(labels, provider.DisplayName()+" Base URL")
+		case "Endpoint":
+			labels = append(labels, provider.DisplayName()+" Endpoint")
 		case "Model":
 			labels = append(labels, provider.DisplayName()+" Model")
-		case "API Key Env":
-			labels = append(labels, provider.DisplayName()+" API Key Env")
+		case "API Key":
+			labels = append(labels, provider.DisplayName()+" API Key")
 		default:
 			labels = append(labels, field)
 		}
@@ -448,20 +429,15 @@ func describeMissingProviderFields(provider domain.Provider, missing []string) s
 func describeMissingProviderConfiguration(provider domain.Provider, missing []string) string {
 	if len(missing) == 1 {
 		switch missing[0] {
-		case "Base URL":
-			return "the " + provider.DisplayName() + " Base URL"
+		case "Endpoint":
+			return "the " + provider.DisplayName() + " Endpoint"
 		case "Model":
 			return "the " + provider.DisplayName() + " Model"
-		case "API Key Env":
-			return "the " + provider.DisplayName() + " API Key Env"
+		case "API Key":
+			return "the " + provider.DisplayName() + " API Key"
 		}
 	}
 	return describeMissingProviderFields(provider, missing)
-}
-
-func (s settingsFormState) buildSettings(base domain.Settings) domain.Settings {
-	_ = base
-	return s.previewResolved().Effective
 }
 
 func nextProvider(current domain.Provider, step int) domain.Provider {
@@ -486,8 +462,7 @@ func nextProvider(current domain.Provider, step int) domain.Provider {
 func settingsFieldsForGroup(group settingsFieldGroup) []settingsField {
 	fields := make([]settingsField, 0, len(settingsFieldOrder))
 	for _, field := range settingsFieldOrder {
-		spec := settingsFieldSpecs[field]
-		if spec.group != group {
+		if settingsFieldSpecs[field].group != group {
 			continue
 		}
 		fields = append(fields, field)
