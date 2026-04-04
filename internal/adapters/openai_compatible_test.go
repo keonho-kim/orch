@@ -15,7 +15,6 @@ import (
 
 type openAICompatibleClientTestCase struct {
 	name            string
-	client          func() Client
 	provider        domain.Provider
 	endpointSuffix  string
 	apiKey          string
@@ -32,7 +31,6 @@ type openAICompatibleClientTestCase struct {
 var openAICompatibleClientCases = []openAICompatibleClientTestCase{
 	{
 		name:            "gemini",
-		client:          NewGeminiClient,
 		provider:        domain.ProviderGemini,
 		endpointSuffix:  "/v1beta/openai",
 		apiKey:          "gemini-key",
@@ -44,7 +42,6 @@ var openAICompatibleClientCases = []openAICompatibleClientTestCase{
 	},
 	{
 		name:            "bedrock",
-		client:          NewBedrockClient,
 		provider:        domain.ProviderBedrock,
 		endpointSuffix:  "/v1",
 		apiKey:          "bedrock-key",
@@ -56,7 +53,6 @@ var openAICompatibleClientCases = []openAICompatibleClientTestCase{
 	},
 	{
 		name:            "claude",
-		client:          NewClaudeClient,
 		provider:        domain.ProviderClaude,
 		endpointSuffix:  "/v1",
 		apiKey:          "claude-key",
@@ -68,7 +64,6 @@ var openAICompatibleClientCases = []openAICompatibleClientTestCase{
 	},
 	{
 		name:            "chatgpt",
-		client:          NewChatGPTClient,
 		provider:        domain.ProviderChatGPT,
 		endpointSuffix:  "/v1",
 		apiKey:          "openai-key",
@@ -80,7 +75,6 @@ var openAICompatibleClientCases = []openAICompatibleClientTestCase{
 	},
 	{
 		name:            "azure",
-		client:          NewAzureClient,
 		provider:        domain.ProviderAzure,
 		apiKey:          "azure-key",
 		wantPath:        "/openai/deployments/deployment-a/chat/completions",
@@ -93,7 +87,6 @@ var openAICompatibleClientCases = []openAICompatibleClientTestCase{
 	},
 	{
 		name:            "vllm",
-		client:          NewVLLMClient,
 		provider:        domain.ProviderVLLM,
 		endpointSuffix:  "/v1",
 		apiKey:          "vllm-key",
@@ -137,7 +130,11 @@ func runOpenAICompatibleClientTest(server *httptest.Server, test openAICompatibl
 	if test.provider == domain.ProviderAzure {
 		endpoint = server.URL
 	}
-	return test.client().Chat(context.Background(), domain.ProviderSettings{
+	client, err := NewClient(test.provider)
+	if err != nil {
+		return ChatResult{}, err
+	}
+	return client.Chat(context.Background(), domain.ProviderSettings{
 		Endpoint: endpoint,
 		Model:    "deployment-a",
 		APIKey:   test.apiKey,

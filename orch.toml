@@ -1,0 +1,54 @@
+provider = "ollama"
+approval_policy = "confirm_mutations"
+self_driving_mode = false
+react_ralph_iter = 3
+plan_ralph_iter = 3
+compact_threshold_k = 100
+
+[providers.ollama]
+endpoint = "http://localhost:11434/v1"
+model = "qwen3.5:35b"
+api_key = ""
+reasoning = ""
+
+[providers.vllm]
+endpoint = "http://localhost:8000/v1"
+model = ""
+api_key = ""
+reasoning = ""
+
+[providers.gemini]
+endpoint = "https://generativelanguage.googleapis.com/v1beta/openai"
+model = ""
+api_key = ""
+reasoning = ""
+
+[providers.vertex]
+endpoint = "https://aiplatform.googleapis.com/v1"
+model = ""
+api_key = ""
+reasoning = ""
+
+[providers.bedrock]
+endpoint = ""
+model = ""
+api_key = ""
+reasoning = ""
+
+[providers.claude]
+endpoint = "https://api.anthropic.com/v1"
+model = ""
+api_key = ""
+reasoning = ""
+
+[providers.azure]
+endpoint = ""
+model = ""
+api_key = ""
+reasoning = ""
+
+[providers.chatgpt]
+endpoint = "https://api.openai.com/v1"
+model = ""
+api_key = ""
+reasoning = ""

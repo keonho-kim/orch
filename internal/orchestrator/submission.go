@@ -33,7 +33,7 @@ func (s *Service) SubmitPromptMode(prompt string, mode domain.RunMode) (string, 
 	if err := s.finalizePromptSubmission(currentSession, submission.record, submission.trimmed); err != nil {
 		return "", err
 	}
-	s.publish(UIEvent{Type: "run_created", RunID: submission.record.RunID, SessionID: currentSession.SessionID, Message: "Run started."})
+	s.publish(ServiceEvent{Type: "run_created", RunID: submission.record.RunID, SessionID: currentSession.SessionID, Message: "Run started."})
 	go s.executeRun(runCtx, submission.record.RunID)
 	return submission.record.RunID, nil
 }

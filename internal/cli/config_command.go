@@ -25,10 +25,6 @@ func parseConfigCommand(args []string) (command, error) {
 	if err != nil {
 		return command{}, err
 	}
-	rest, err = normalizeConfigArgs(rest)
-	if err != nil {
-		return command{}, err
-	}
 	state, err := parseConfigFlags(rest)
 	if err != nil {
 		return command{}, err
@@ -51,17 +47,11 @@ type parsedConfigFlags struct {
 	compactThresholdK int
 }
 
-func normalizeConfigArgs(rest []string) ([]string, error) {
-	if len(rest) == 0 {
-		return nil, fmt.Errorf("%s", configUsage)
-	}
-	if len(rest) == 1 && rest[0] == "list" {
-		return []string{"--list"}, nil
-	}
-	return rest, nil
-}
-
 func parseConfigFlags(rest []string) (parsedConfigFlags, error) {
+	if len(rest) == 0 {
+		return parsedConfigFlags{}, fmt.Errorf("%s", configUsage)
+	}
+
 	flagSet := flag.NewFlagSet("config", flag.ContinueOnError)
 	flagSet.SetOutput(io.Discard)
 

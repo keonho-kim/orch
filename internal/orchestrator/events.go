@@ -8,8 +8,6 @@ type ServiceEvent struct {
 	Payload   map[string]any `json:"payload,omitempty"`
 }
 
-type UIEvent = ServiceEvent
-
 func (s *Service) SubscribeEvents() (<-chan ServiceEvent, func()) {
 	ch := make(chan ServiceEvent, 256)
 

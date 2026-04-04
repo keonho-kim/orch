@@ -87,11 +87,11 @@ func (s *Service) RunSnapshot(runID string) (RunSnapshot, error) {
 }
 
 func (s *Service) ListSessions(limit int) ([]domain.SessionMetadata, error) {
-	return s.sessions.ListSessions(limit)
+	return s.sessionManager.ListSessions(limit)
 }
 
 func (s *Service) LatestSessionID() (string, error) {
-	return s.sessions.LatestSessionID()
+	return s.sessionManager.LatestSessionID()
 }
 
 func (s *Service) CurrentContextSnapshot() (domain.ContextSnapshot, error) {
@@ -124,7 +124,7 @@ func (s *Service) RestoreSession(sessionID string) error {
 		return fmt.Errorf("cannot restore a session while runs are active")
 	}
 
-	meta, err := s.sessions.LoadMetadata(sessionID)
+	meta, err := s.sessionManager.LoadMetadata(sessionID)
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func (s *Service) RestoreSession(sessionID string) error {
 		s.currentRun = runRecords[0].RunID
 		s.lastPrompt = runRecords[0].Prompt
 	}
-	s.publish(UIEvent{Type: "session_restored", SessionID: sessionID, Message: fmt.Sprintf("Restored session %s.", sessionID)})
+	s.publish(ServiceEvent{Type: "session_restored", SessionID: sessionID, Message: fmt.Sprintf("Restored session %s.", sessionID)})
 	return nil
 }
 
@@ -167,7 +167,7 @@ func (s *Service) OpenNewSession() error {
 	}
 	model := strings.TrimSpace(settings.ConfigFor(settings.DefaultProvider).Model)
 
-	newSession, err := s.sessions.Create(
+	newSession, err := s.sessionManager.Create(
 		s.paths.RepoRoot,
 		settings.DefaultProvider,
 		model,
@@ -194,7 +194,7 @@ func (s *Service) OpenNewSession() error {
 	s.runs = make(map[string]*runState)
 	s.mu.Unlock()
 
-	s.publish(UIEvent{Type: "session_opened", SessionID: newSession.SessionID, Message: fmt.Sprintf("Opened new session %s.", newSession.SessionID)})
+	s.publish(ServiceEvent{Type: "session_opened", SessionID: newSession.SessionID, Message: fmt.Sprintf("Opened new session %s.", newSession.SessionID)})
 	if strings.TrimSpace(oldSessionID) != "" && oldSessionID != newSession.SessionID {
 		go func(sessionID string) {
 			_ = s.finalizeSessionByID(sessionID)

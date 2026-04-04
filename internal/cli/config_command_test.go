@@ -26,6 +26,14 @@ func TestParseCommandConfigList(t *testing.T) {
 	}
 }
 
+func TestParseCommandRejectsLegacyConfigListAlias(t *testing.T) {
+	t.Parallel()
+
+	if _, err := parseCommand([]string{"config", "list"}); err == nil {
+		t.Fatal("expected legacy config list alias to fail")
+	}
+}
+
 func TestParseCommandConfigSetWithUnifiedFlags(t *testing.T) {
 	t.Parallel()
 
@@ -141,5 +149,4 @@ func setTestConfigHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", home)
-	t.Setenv("ORCH_MANAGED_SETTINGS", filepath.Join(home, "managed-settings.json"))
 }

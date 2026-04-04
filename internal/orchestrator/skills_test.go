@@ -86,14 +86,15 @@ func newIterationContextTestService(t *testing.T) (*Service, config.Paths) {
 	}
 	manager := session.NewManager(paths.SessionsDir)
 	service := &Service{
-		ctx:      context.Background(),
-		paths:    paths,
-		sessions: session.NewService(manager),
+		ctx:            context.Background(),
+		paths:          paths,
+		sessionManager: manager,
+		sessions:       session.NewService(manager),
 	}
 	if err := os.MkdirAll(paths.SessionsDir, 0o755); err != nil {
 		t.Fatalf("mkdir sessions dir: %v", err)
 	}
-	if err := service.sessions.SaveMetadata(domain.SessionMetadata{
+	if err := manager.SaveMetadata(domain.SessionMetadata{
 		SessionID:     "S1",
 		WorkspacePath: paths.TestWorkspace,
 		WorkerRole:    domain.AgentRoleGateway,

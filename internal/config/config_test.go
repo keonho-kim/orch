@@ -77,7 +77,7 @@ func TestSaveAndLoadSettings(t *testing.T) {
 	}
 }
 
-func TestLoadDocumentRejectsLegacyJSONSettings(t *testing.T) {
+func TestLoadDocumentReturnsDefaultDocumentWithoutConfigFile(t *testing.T) {
 	setTestConfigHome(t)
 
 	repoRoot := t.TempDir()
@@ -86,13 +86,12 @@ func TestLoadDocumentRejectsLegacyJSONSettings(t *testing.T) {
 		t.Fatalf("resolve paths: %v", err)
 	}
 
-	if err := os.WriteFile(paths.LegacyProjectSettingsFile, []byte("{}\n"), 0o644); err != nil {
-		t.Fatalf("write legacy settings: %v", err)
+	document, err := LoadDocument(paths)
+	if err != nil {
+		t.Fatalf("load document: %v", err)
 	}
-
-	_, err = LoadDocument(paths)
-	if err == nil || !strings.Contains(err.Error(), "legacy JSON settings") {
-		t.Fatalf("expected legacy settings error, got %v", err)
+	if document.Provider != "" {
+		t.Fatalf("expected default document, got %+v", document)
 	}
 }
 
@@ -121,6 +120,31 @@ func TestSaveSettingsAddsGitExcludeEntry(t *testing.T) {
 	}
 }
 
+func TestLooksLikeRepoRootRequiresBootstrapAndRepoMarker(t *testing.T) {
+	repoRoot := t.TempDir()
+	if LooksLikeRepoRoot(repoRoot) {
+		t.Fatal("expected missing bootstrap assets to fail repo root detection")
+	}
+
+	bootstrapPath := filepath.Join(repoRoot, "runtime-asset", "bootstrap", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(bootstrapPath), 0o755); err != nil {
+		t.Fatalf("mkdir bootstrap: %v", err)
+	}
+	if err := os.WriteFile(bootstrapPath, []byte("bootstrap"), 0o644); err != nil {
+		t.Fatalf("write bootstrap: %v", err)
+	}
+	if LooksLikeRepoRoot(repoRoot) {
+		t.Fatal("expected repo root marker to be required")
+	}
+
+	if err := os.WriteFile(filepath.Join(repoRoot, "go.mod"), []byte("module example.com/test\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if !LooksLikeRepoRoot(repoRoot) {
+		t.Fatal("expected go.mod marker to satisfy repo root detection")
+	}
+}
+
 func TestMarshalDocumentRedactsAPIKeys(t *testing.T) {
 	document := DefaultDocument()
 	document.Provider = "chatgpt"
@@ -142,5 +166,4 @@ func setTestConfigHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", home)
-	t.Setenv("ORCH_MANAGED_SETTINGS", filepath.Join(home, "managed-settings.json"))
 }

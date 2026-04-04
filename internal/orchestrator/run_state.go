@@ -66,9 +66,9 @@ func (s *Service) ResolveApproval(runID string, approved bool) error {
 	}
 
 	if approved {
-		s.publish(UIEvent{Type: "approval_resolved", RunID: runID, Message: "Approved tool execution."})
+		s.publish(ServiceEvent{Type: "approval_resolved", RunID: runID, Message: "Approved tool execution."})
 	} else {
-		s.publish(UIEvent{Type: "approval_resolved", RunID: runID, Message: fmt.Sprintf("Denied tool execution: %s.", request.Call.Name)})
+		s.publish(ServiceEvent{Type: "approval_resolved", RunID: runID, Message: fmt.Sprintf("Denied tool execution: %s.", request.Call.Name)})
 	}
 
 	return nil
@@ -111,7 +111,7 @@ func (s *Service) ShutdownAll() error {
 	}
 
 	if len(active) > 0 {
-		s.publish(UIEvent{Type: "snapshot", Message: fmt.Sprintf("Cancelled %d active run(s).", len(active))})
+		s.publish(ServiceEvent{Type: "snapshot", Message: fmt.Sprintf("Cancelled %d active run(s).", len(active))})
 	}
 
 	if len(failures) > 0 {
@@ -129,7 +129,7 @@ func (s *Service) saveActivePlan(cache domain.PlanCache) error {
 	s.mu.Lock()
 	s.activePlan = cache
 	s.mu.Unlock()
-	s.publish(UIEvent{Type: "snapshot", Message: "Plan cache updated."})
+	s.publish(ServiceEvent{Type: "snapshot", Message: "Plan cache updated."})
 	return nil
 }
 
@@ -174,7 +174,7 @@ func (s *Service) setRunIteration(runID string, iteration int) error {
 	if err := s.persistRun(record); err != nil {
 		return err
 	}
-	s.publish(UIEvent{Type: "run_updated", RunID: runID})
+	s.publish(ServiceEvent{Type: "run_updated", RunID: runID})
 	return nil
 }
 
@@ -192,7 +192,7 @@ func (s *Service) setRunCwd(runID string, cwd string) error {
 	if err := s.persistRun(record); err != nil {
 		return err
 	}
-	s.publish(UIEvent{Type: "run_updated", RunID: runID, Message: "Working directory updated."})
+	s.publish(ServiceEvent{Type: "run_updated", RunID: runID, Message: "Working directory updated."})
 	return nil
 }
 

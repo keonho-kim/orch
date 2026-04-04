@@ -177,7 +177,7 @@ func (s *Service) ForceCompact() error {
 }
 
 func (s *Service) finalizeSessionByID(sessionID string) error {
-	meta, err := s.sessions.LoadMetadata(sessionID)
+	meta, err := s.sessionManager.LoadMetadata(sessionID)
 	if err != nil {
 		return err
 	}
@@ -224,7 +224,7 @@ func (s *Service) FinalizeCurrentSession() error {
 }
 
 func (s *Service) runSessionMaintenance(sessionID string) {
-	meta, err := s.sessions.LoadMetadata(sessionID)
+	meta, err := s.sessionManager.LoadMetadata(sessionID)
 	if err != nil {
 		return
 	}
@@ -237,14 +237,14 @@ func (s *Service) runSessionMaintenance(sessionID string) {
 		if updated, updateErr := s.sessions.ApplyTitle(meta, title); updateErr == nil {
 			meta = updated
 			s.setCurrentSessionIfActive(updated)
-			s.publish(UIEvent{Type: "snapshot", SessionID: updated.SessionID, Message: "Session title updated."})
+			s.publish(ServiceEvent{Type: "snapshot", SessionID: updated.SessionID, Message: "Session title updated."})
 		}
 	}
 
 	s.mu.RLock()
 	settings := s.settings
 	s.mu.RUnlock()
-	if s.sessions.ShouldCompact(settings, meta) {
+	if session.ShouldCompact(settings, meta) {
 		summary, throughSeq, compactErr := s.generateCompactSummary(context.Background(), meta)
 		if compactErr == nil {
 			updated, applyErr := s.sessions.ApplyCompactSummary(meta, throughSeq, summary)
@@ -252,7 +252,7 @@ func (s *Service) runSessionMaintenance(sessionID string) {
 				return
 			}
 			s.setCurrentSessionIfActive(updated)
-			s.publish(UIEvent{Type: "snapshot", SessionID: updated.SessionID, Message: "Session compacted."})
+			s.publish(ServiceEvent{Type: "snapshot", SessionID: updated.SessionID, Message: "Session compacted."})
 		}
 	}
 }
@@ -271,7 +271,7 @@ func (s *Service) runChatHistoryAssistantSummary(sessionID string, runID string,
 		return
 	}
 
-	meta, err := s.sessions.LoadMetadata(sessionID)
+	meta, err := s.sessionManager.LoadMetadata(sessionID)
 	if err != nil {
 		_ = s.appendRunEvent(runID, "chat_history", fmt.Sprintf("Could not load session metadata for chatHistory: %v", err))
 		return

@@ -23,18 +23,6 @@ type ChatHistoryEntry struct {
 	Pointer   string
 }
 
-func (s *Service) ReadChatHistory() (string, error) {
-	return s.manager.ReadChatHistory()
-}
-
-func (s *Service) ReadChatHistoryRecent(limitEntries int, maxBytes int) (string, error) {
-	return s.manager.ReadChatHistoryRecent(limitEntries, maxBytes)
-}
-
-func (s *Service) AppendChatHistory(entry ChatHistoryEntry) error {
-	return s.manager.AppendChatHistory(entry)
-}
-
 func (s *Service) AppendChatHistoryUser(meta domain.SessionMetadata, runID string, summary string) error {
 	return s.appendChatHistory(meta, runID, ChatHistorySpeakerUser, summary, domain.SessionRecordUser)
 }
@@ -50,7 +38,7 @@ func (s *Service) appendChatHistory(
 	summary string,
 	recordType domain.SessionRecordType,
 ) error {
-	return s.AppendChatHistory(ChatHistoryEntry{
+	return s.manager.AppendChatHistory(ChatHistoryEntry{
 		CreatedAt: time.Now(),
 		SessionID: meta.SessionID,
 		RunID:     runID,

@@ -63,6 +63,7 @@ func TestSessionContextMessagesUseLatestCompactAndLaterRecords(t *testing.T) {
 	service := &Service{
 		ctx:            context.Background(),
 		paths:          paths,
+		sessionManager: manager,
 		sessions:       session.NewService(manager),
 		currentSession: meta,
 	}
@@ -121,9 +122,10 @@ func TestLoadInheritedContextUsesParentCompactSummaryAndLaterRecords(t *testing.
 	}
 
 	service := &Service{
-		ctx:      context.Background(),
-		paths:    paths,
-		sessions: session.NewService(manager),
+		ctx:            context.Background(),
+		paths:          paths,
+		sessionManager: manager,
+		sessions:       session.NewService(manager),
 		clients: map[domain.Provider]adapters.Client{
 			domain.ProviderOllama: chatHistoryClientStub{content: "user digest"},
 		},
@@ -159,9 +161,10 @@ func TestRunChatHistoryUserSummaryAppendsEntry(t *testing.T) {
 	}
 
 	service := &Service{
-		ctx:      context.Background(),
-		paths:    paths,
-		sessions: session.NewService(manager),
+		ctx:            context.Background(),
+		paths:          paths,
+		sessionManager: manager,
+		sessions:       session.NewService(manager),
 		clients: map[domain.Provider]adapters.Client{
 			domain.ProviderOllama: chatHistoryClientStub{content: "user digest"},
 		},
@@ -169,7 +172,7 @@ func TestRunChatHistoryUserSummaryAppendsEntry(t *testing.T) {
 
 	service.runChatHistoryUserSummary(meta, "R1", "please inspect the failing tests")
 
-	history, err := service.sessions.ReadChatHistory()
+	history, err := manager.ReadChatHistory()
 	if err != nil {
 		t.Fatalf("read chat history: %v", err)
 	}
@@ -193,9 +196,10 @@ func TestRunChatHistoryAssistantSummaryAppendsEntry(t *testing.T) {
 	}
 
 	service := &Service{
-		ctx:      context.Background(),
-		paths:    paths,
-		sessions: session.NewService(manager),
+		ctx:            context.Background(),
+		paths:          paths,
+		sessionManager: manager,
+		sessions:       session.NewService(manager),
 		clients: map[domain.Provider]adapters.Client{
 			domain.ProviderOllama: chatHistoryClientStub{content: "assistant digest"},
 		},
@@ -203,7 +207,7 @@ func TestRunChatHistoryAssistantSummaryAppendsEntry(t *testing.T) {
 
 	service.runChatHistoryAssistantSummary(meta.SessionID, "R2", "I found the regression and described the fix.")
 
-	history, err := service.sessions.ReadChatHistory()
+	history, err := manager.ReadChatHistory()
 	if err != nil {
 		t.Fatalf("read chat history: %v", err)
 	}

@@ -417,7 +417,7 @@ func (s *Service) awaitApproval(ctx context.Context, runID string, call domain.T
 	if err := s.appendRunEvent(runID, "approval", formatApprovalRequest(request)); err != nil {
 		return false, err
 	}
-	s.publish(UIEvent{Type: "approval_required", RunID: runID, Message: "Approval required."})
+	s.publish(ServiceEvent{Type: "approval_required", RunID: runID, Message: "Approval required."})
 
 	select {
 	case approved := <-response:
@@ -443,7 +443,7 @@ func (s *Service) appendOutput(runID string, chunk string) error {
 	if err := s.persistRun(record); err != nil {
 		return err
 	}
-	s.publish(UIEvent{Type: "run_output", RunID: runID})
+	s.publish(ServiceEvent{Type: "run_output", RunID: runID})
 	return nil
 }
 
@@ -458,7 +458,7 @@ func (s *Service) appendThinking(runID string, chunk string) error {
 	state.record.UpdatedAt = time.Now()
 	s.mu.Unlock()
 
-	s.publish(UIEvent{Type: "run_thinking", RunID: runID})
+	s.publish(ServiceEvent{Type: "run_thinking", RunID: runID})
 	return nil
 }
 
@@ -490,7 +490,7 @@ func (s *Service) updateRunTask(runID string, task string) error {
 	if err := s.persistRun(record); err != nil {
 		return err
 	}
-	s.publish(UIEvent{Type: "run_updated", RunID: runID, Message: record.CurrentTask})
+	s.publish(ServiceEvent{Type: "run_updated", RunID: runID, Message: record.CurrentTask})
 	return nil
 }
 
@@ -534,7 +534,7 @@ func (s *Service) completeRun(runID string) error {
 	}
 	go s.runChatHistoryAssistantSummary(record.SessionID, record.RunID, content)
 	go s.runSessionMaintenance(record.SessionID)
-	s.publish(UIEvent{Type: "run_updated", RunID: runID, Message: "Run completed."})
+	s.publish(ServiceEvent{Type: "run_updated", RunID: runID, Message: "Run completed."})
 	return nil
 }
 
@@ -561,7 +561,7 @@ func (s *Service) failRun(runID string, err error) error {
 		_ = s.updateCurrentSessionTaskMetadata(domain.TaskStatusFailed, err.Error(), nil, nil, nil, nil, "run_failed")
 	}
 	_ = s.appendRunEvent(runID, "error", err.Error())
-	s.publish(UIEvent{Type: "run_updated", RunID: runID, Message: err.Error()})
+	s.publish(ServiceEvent{Type: "run_updated", RunID: runID, Message: err.Error()})
 	return nil
 }
 
@@ -593,7 +593,7 @@ func (s *Service) cancelRun(runID string, err error) error {
 		_ = s.updateCurrentSessionTaskMetadata(domain.TaskStatusCancelled, message, nil, nil, nil, nil, "")
 	}
 	_ = s.appendRunEvent(runID, "cancel", message)
-	s.publish(UIEvent{Type: "run_updated", RunID: runID, Message: message})
+	s.publish(ServiceEvent{Type: "run_updated", RunID: runID, Message: message})
 	return nil
 }
 
@@ -622,7 +622,7 @@ func (s *Service) loadIterationInputs(record domain.RunRecord, selectedSkills []
 	meta := domain.SessionMetadata{}
 	currentContext := session.Context{}
 	if strings.TrimSpace(record.SessionID) != "" {
-		meta, err = s.sessions.LoadMetadata(record.SessionID)
+		meta, err = s.sessionManager.LoadMetadata(record.SessionID)
 		if err != nil {
 			return iterationInputs{}, err
 		}
@@ -704,7 +704,7 @@ func (s *Service) loadChatHistoryMemory(role domain.AgentRole) (string, error) {
 		limitEntries = 6
 		maxBytes = 2400
 	}
-	return s.sessions.ReadChatHistoryRecent(limitEntries, maxBytes)
+	return s.sessionManager.ReadChatHistoryRecent(limitEntries, maxBytes)
 }
 
 func formatSelectedSkills(selectedSkills []selectedSkill) string {

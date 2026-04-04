@@ -43,7 +43,8 @@ func TestGenerateCompactSummaryProducesOrderedPointerAwareSummary(t *testing.T) 
 
 	manager := session.NewManager(filepath.Join(t.TempDir(), ".orch", "sessions"))
 	service := &Service{
-		sessions: session.NewService(manager),
+		sessionManager: manager,
+		sessions:       session.NewService(manager),
 		clients: map[domain.Provider]adapters.Client{
 			domain.ProviderOllama: maintenanceClientStub{
 				responses: map[string]string{
@@ -96,7 +97,8 @@ func TestDeriveSessionTitleFallsBackToFirstUserRecord(t *testing.T) {
 
 	manager := session.NewManager(filepath.Join(t.TempDir(), ".orch", "sessions"))
 	service := &Service{
-		sessions: session.NewService(manager),
+		sessionManager: manager,
+		sessions:       session.NewService(manager),
 		clients: map[domain.Provider]adapters.Client{
 			domain.ProviderOllama: maintenanceClientStub{
 				errs: map[string]error{
@@ -139,9 +141,10 @@ func TestRunChatHistoryUserSummarySkipsAppendOnProviderError(t *testing.T) {
 	}
 
 	service := &Service{
-		ctx:      context.Background(),
-		paths:    paths,
-		sessions: session.NewService(manager),
+		ctx:            context.Background(),
+		paths:          paths,
+		sessionManager: manager,
+		sessions:       session.NewService(manager),
 		clients: map[domain.Provider]adapters.Client{
 			domain.ProviderOllama: maintenanceClientStub{
 				errs: map[string]error{
@@ -153,7 +156,7 @@ func TestRunChatHistoryUserSummarySkipsAppendOnProviderError(t *testing.T) {
 
 	service.runChatHistoryUserSummary(meta, "R1", "please inspect the failing tests")
 
-	history, err := service.sessions.ReadChatHistory()
+	history, err := manager.ReadChatHistory()
 	if err != nil {
 		t.Fatalf("read chat history: %v", err)
 	}

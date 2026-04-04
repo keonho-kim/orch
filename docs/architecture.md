@@ -38,9 +38,13 @@
   - bootstrap, prompt submission, run runtime, session bridge, snapshot/status를 파일 단위로 분리
 - `internal/tooling`
   - OT operation registry, validation, approval, state execute, terminal execute를 분리
-  - executor facade와 external command helper, OT inspect/delegate/pointer 흐름을 분리
+  - executor, external command helper, OT inspect/delegate/pointer 흐름을 분리
 - `internal/cli`
   - command parsing, app bootstrap, interactive TUI, exec streaming, subagent handoff를 분리
+- `internal/apiserver`
+  - server lifecycle, discovery file, auth middleware, JSON response, SSE writer를 분리
+- `internal/workspace`
+  - provision, bootstrap sync, directory sync, env sanitize를 분리
 
 ## 흐름
 
@@ -59,7 +63,7 @@ flowchart TD
 
 - 설정 문서의 단일 소스 오브 트루스는 `orch.toml`
 - provider 설정 필드는 `endpoint`, `model`, `api_key`, `reasoning`으로 통일
-- 레거시 JSON scope 설정은 더 이상 지원하지 않음
+- 설정 파일은 `orch.toml`만 지원
 
 ## 구현 규칙
 

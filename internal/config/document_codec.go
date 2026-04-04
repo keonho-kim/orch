@@ -155,9 +155,6 @@ func LoadConfigState(paths Paths) (ConfigState, error) {
 func LoadDocument(paths Paths) (Document, error) {
 	data, err := os.ReadFile(paths.ConfigFile)
 	if os.IsNotExist(err) {
-		if legacy := ExistingLegacyConfigFiles(paths); len(legacy) > 0 {
-			return Document{}, fmt.Errorf("legacy JSON settings are no longer supported; migrate them manually to %s before running orch: %s", paths.ConfigFile, strings.Join(legacy, ", "))
-		}
 		return DefaultDocument(), nil
 	}
 	if err != nil {

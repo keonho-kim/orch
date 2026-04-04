@@ -133,6 +133,11 @@ func (s *Service) MarkRunStarted(meta domain.SessionMetadata, update RunStartUpd
 	return meta, s.manager.SaveMetadata(meta)
 }
 
+func ShouldCompact(settings domain.Settings, meta domain.SessionMetadata) bool {
+	threshold := settings.CompactThresholdK * 1000
+	return threshold > 0 && meta.TokensSinceCompact >= threshold
+}
+
 func FallbackSessionTitle(records []domain.SessionRecord, currentTitle string) string {
 	for _, record := range records {
 		if record.Type != domain.SessionRecordUser {

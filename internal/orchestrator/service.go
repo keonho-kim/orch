@@ -18,13 +18,14 @@ const (
 )
 
 type Service struct {
-	ctx       context.Context
-	store     *sqlitestore.Store
-	tooling   *tooling.Executor
-	paths     config.Paths
-	agentRole domain.AgentRole
-	clients   map[domain.Provider]adapters.Client
-	sessions  *session.Service
+	ctx            context.Context
+	store          *sqlitestore.Store
+	tooling        *tooling.Executor
+	paths          config.Paths
+	agentRole      domain.AgentRole
+	clients        map[domain.Provider]adapters.Client
+	sessionManager *session.Manager
+	sessions       *session.Service
 
 	eventMu       sync.RWMutex
 	maintenanceMu sync.Mutex
@@ -125,27 +126,24 @@ func NewService(
 	paths config.Paths,
 	options BootOptions,
 ) (*Service, error) {
+	clients, err := buildClients()
+	if err != nil {
+		return nil, err
+	}
+	sessionManager := session.NewManager(paths.SessionsDir)
 	service := &Service{
-		ctx:       ctx,
-		store:     store,
-		tooling:   executor,
-		paths:     paths,
-		agentRole: normalizeAgentRole(options.AgentRole),
-		clients: map[domain.Provider]adapters.Client{
-			domain.ProviderOllama:  adapters.NewOllamaClient(),
-			domain.ProviderVLLM:    adapters.NewVLLMClient(),
-			domain.ProviderGemini:  adapters.NewGeminiClient(),
-			domain.ProviderVertex:  adapters.NewVertexClient(),
-			domain.ProviderBedrock: adapters.NewBedrockClient(),
-			domain.ProviderClaude:  adapters.NewClaudeClient(),
-			domain.ProviderAzure:   adapters.NewAzureClient(),
-			domain.ProviderChatGPT: adapters.NewChatGPTClient(),
-		},
-		runs:        make(map[string]*runState),
-		subscribers: make(map[int]chan ServiceEvent),
+		ctx:            ctx,
+		store:          store,
+		tooling:        executor,
+		paths:          paths,
+		agentRole:      normalizeAgentRole(options.AgentRole),
+		clients:        clients,
+		sessionManager: sessionManager,
+		runs:           make(map[string]*runState),
+		subscribers:    make(map[int]chan ServiceEvent),
 	}
 	service.references = newReferenceResolver()
-	service.sessions = session.NewService(session.NewManager(paths.SessionsDir))
+	service.sessions = session.NewService(sessionManager)
 	if executor != nil {
 		executor.SetStateResolvers(service.contextSnapshotForRun, service.listTasksForRun, service.getTaskForRun)
 	}
@@ -155,6 +153,18 @@ func NewService(
 	}
 
 	return service, nil
+}
+
+func buildClients() (map[domain.Provider]adapters.Client, error) {
+	clients := make(map[domain.Provider]adapters.Client, len(domain.Providers()))
+	for _, provider := range domain.Providers() {
+		client, err := adapters.NewClient(provider)
+		if err != nil {
+			return nil, err
+		}
+		clients[provider] = client
+	}
+	return clients, nil
 }
 
 func normalizeAgentRole(role domain.AgentRole) domain.AgentRole {
@@ -193,6 +203,6 @@ func (s *Service) reloadConfigState(message string) error {
 	s.configState = configState
 	s.mu.Unlock()
 
-	s.publish(UIEvent{Type: "config_updated", Message: message})
+	s.publish(ServiceEvent{Type: "config_updated", Message: message})
 	return nil
 }

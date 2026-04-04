@@ -112,7 +112,7 @@ Plan mode는 읽기 전용이며 아래 operation만 허용합니다.
 - provider 기본값과 필수 필드는 provider registry에서 관리합니다.
 - 설정 문서와 TUI는 `endpoint`, `model`, `api_key`, `reasoning` 명칭을 공통으로 사용합니다.
 - 거대 분기는 가능한 범위에서 registry, dispatcher, reducer 스타일 helper로 분해합니다.
-- 레거시 JSON 설정은 더 이상 지원하지 않으며, `orch.toml`로 수동 마이그레이션해야 합니다.
+- 설정 파일은 `orch.toml`만 사용합니다.
 
 ## 검증
 

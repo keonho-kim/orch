@@ -20,20 +20,16 @@ const (
 )
 
 type Paths struct {
-	RepoRoot                  string
-	RuntimeAssetDir           string
-	BootstrapAssets           string
-	ConfigFile                string
-	LegacyProjectSettingsFile string
-	LegacyUserSettingsFile    string
-	LegacyLocalSettingsFile   string
-	LegacyManagedSettingsFile string
-	UserConfigDir             string
-	DBPath                    string
-	TestWorkspace             string
-	LocalStateDir             string
-	APIDir                    string
-	SessionsDir               string
+	RepoRoot        string
+	RuntimeAssetDir string
+	BootstrapAssets string
+	ConfigFile      string
+	UserConfigDir   string
+	DBPath          string
+	TestWorkspace   string
+	LocalStateDir   string
+	APIDir          string
+	SessionsDir     string
 }
 
 func ResolvePaths(repoRoot string) (Paths, error) {
@@ -57,20 +53,16 @@ func ResolvePathsWithConfigFile(repoRoot string, configFile string) (Paths, erro
 	}
 
 	return Paths{
-		RepoRoot:                  repoRoot,
-		RuntimeAssetDir:           filepath.Join(repoRoot, runtimeAssetDirName),
-		BootstrapAssets:           filepath.Join(repoRoot, runtimeAssetDirName, bootstrapDirName),
-		ConfigFile:                resolvedConfigFile,
-		LegacyProjectSettingsFile: filepath.Join(repoRoot, "orch.settings.json"),
-		LegacyUserSettingsFile:    filepath.Join(userConfigDir, "settings.json"),
-		LegacyLocalSettingsFile:   filepath.Join(repoRoot, localStateDirName, "settings.local.json"),
-		LegacyManagedSettingsFile: managedSettingsPath(),
-		UserConfigDir:             userConfigDir,
-		DBPath:                    filepath.Join(userConfigDir, dbFileName),
-		TestWorkspace:             filepath.Join(repoRoot, testWorkspaceName),
-		LocalStateDir:             filepath.Join(repoRoot, localStateDirName),
-		APIDir:                    filepath.Join(repoRoot, localStateDirName, "api"),
-		SessionsDir:               filepath.Join(repoRoot, localStateDirName, sessionsDirName),
+		RepoRoot:        repoRoot,
+		RuntimeAssetDir: filepath.Join(repoRoot, runtimeAssetDirName),
+		BootstrapAssets: filepath.Join(repoRoot, runtimeAssetDirName, bootstrapDirName),
+		ConfigFile:      resolvedConfigFile,
+		UserConfigDir:   userConfigDir,
+		DBPath:          filepath.Join(userConfigDir, dbFileName),
+		TestWorkspace:   filepath.Join(repoRoot, testWorkspaceName),
+		LocalStateDir:   filepath.Join(repoRoot, localStateDirName),
+		APIDir:          filepath.Join(repoRoot, localStateDirName, "api"),
+		SessionsDir:     filepath.Join(repoRoot, localStateDirName, sessionsDirName),
 	}, nil
 }
 

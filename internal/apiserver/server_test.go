@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,6 +58,81 @@ func TestStatusRequiresBearerToken(t *testing.T) {
 	}()
 	if response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unexpected status code: %d", response.StatusCode)
+	}
+}
+
+func TestAuthAcceptsMatchingBearerToken(t *testing.T) {
+	server, _, cleanup := newTestServer(t)
+	defer cleanup()
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/status", nil)
+	request.Header.Set("Authorization", "Bearer "+server.Discovery().Token)
+	recorder := httptest.NewRecorder()
+
+	called := false
+	server.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	})).ServeHTTP(recorder, request)
+
+	if !called {
+		t.Fatal("expected auth middleware to pass matching bearer token")
+	}
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("unexpected status code: %d", recorder.Code)
+	}
+}
+
+func TestWriteSSEHeadersRejectsNonFlusherWriter(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/v1/events", nil)
+	writer := &nonFlusherResponseWriter{header: http.Header{}}
+	_ = request
+
+	flusher, ok := writeSSEHeaders(writer)
+	if ok || flusher != nil {
+		t.Fatal("expected non-flusher writer to be rejected")
+	}
+	if writer.status != http.StatusInternalServerError {
+		t.Fatalf("unexpected status: %d", writer.status)
+	}
+	if !strings.Contains(writer.body.String(), "streaming is not supported") {
+		t.Fatalf("unexpected response body: %q", writer.body.String())
+	}
+}
+
+func TestRemoveDiscoveryFilesPreservesOtherCurrentDiscovery(t *testing.T) {
+	server, _, cleanup := newTestServer(t)
+	defer cleanup()
+
+	other := Discovery{
+		BaseURL:   "http://127.0.0.1:9999",
+		Token:     "other",
+		PID:       1,
+		SessionID: "other-session",
+		RepoRoot:  server.paths.RepoRoot,
+		StartedAt: time.Now(),
+	}
+	if err := writeJSONFileAtomic(server.currentDiscoveryPath(), other); err != nil {
+		t.Fatalf("write other current discovery: %v", err)
+	}
+
+	if err := server.removeDiscoveryFiles(); err != nil {
+		t.Fatalf("remove discovery files: %v", err)
+	}
+
+	if _, err := os.Stat(server.discoveryFilePath()); !os.IsNotExist(err) {
+		t.Fatalf("expected session discovery removal, stat err=%v", err)
+	}
+	data, err := os.ReadFile(server.currentDiscoveryPath())
+	if err != nil {
+		t.Fatalf("read current discovery: %v", err)
+	}
+	var got Discovery
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("decode current discovery: %v", err)
+	}
+	if got.SessionID != other.SessionID || got.BaseURL != other.BaseURL {
+		t.Fatalf("unexpected current discovery: %+v", got)
 	}
 }
 
@@ -275,7 +351,6 @@ func newTestServer(t *testing.T) (*Server, *orchestrator.Service, func()) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", home)
-	t.Setenv("ORCH_MANAGED_SETTINGS", filepath.Join(home, "managed-settings.json"))
 
 	repoRoot := t.TempDir()
 	paths, err := config.ResolvePaths(repoRoot)
@@ -325,6 +400,24 @@ func newTestServer(t *testing.T) (*Server, *orchestrator.Service, func()) {
 		_ = store.Close()
 	}
 	return server, service, cleanup
+}
+
+type nonFlusherResponseWriter struct {
+	header http.Header
+	body   strings.Builder
+	status int
+}
+
+func (w *nonFlusherResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *nonFlusherResponseWriter) Write(data []byte) (int, error) {
+	return w.body.Write(data)
+}
+
+func (w *nonFlusherResponseWriter) WriteHeader(statusCode int) {
+	w.status = statusCode
 }
 
 func writeBootstrapAssets(t *testing.T, paths config.Paths) {

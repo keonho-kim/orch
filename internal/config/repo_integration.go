@@ -13,18 +13,9 @@ func LooksLikeRepoRoot(path string) bool {
 	if !fileExists(bootstrapPath) {
 		return false
 	}
-	markers := []string{
-		filepath.Join(path, "go.mod"),
-		filepath.Join(path, ".git"),
-		filepath.Join(path, settingsFileName),
-		filepath.Join(path, "orch.settings.json"),
-	}
-	for _, marker := range markers {
-		if fileExists(marker) || dirExists(marker) {
-			return true
-		}
-	}
-	return true
+	return fileExists(filepath.Join(path, "go.mod")) ||
+		dirExists(filepath.Join(path, ".git")) ||
+		fileExists(filepath.Join(path, settingsFileName))
 }
 
 func ensureConfigIgnored(paths Paths) error {

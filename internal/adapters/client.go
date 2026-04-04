@@ -66,36 +66,17 @@ type Client interface {
 	Chat(ctx context.Context, settings domain.ProviderSettings, request ChatRequest, onDelta DeltaHandler) (ChatResult, error)
 }
 
-func NewOllamaClient() Client {
-	return ollamaClient{}
-}
-
-func NewVLLMClient() Client {
-	return newOpenAICompatibleClient(domain.ProviderVLLM)
-}
-
-func NewGeminiClient() Client {
-	return newOpenAICompatibleClient(domain.ProviderGemini)
-}
-
-func NewVertexClient() Client {
-	return vertexClient{}
-}
-
-func NewBedrockClient() Client {
-	return newOpenAICompatibleClient(domain.ProviderBedrock)
-}
-
-func NewClaudeClient() Client {
-	return newOpenAICompatibleClient(domain.ProviderClaude)
-}
-
-func NewAzureClient() Client {
-	return newOpenAICompatibleClient(domain.ProviderAzure)
-}
-
-func NewChatGPTClient() Client {
-	return newOpenAICompatibleClient(domain.ProviderChatGPT)
+func NewClient(provider domain.Provider) (Client, error) {
+	switch provider {
+	case domain.ProviderOllama:
+		return ollamaClient{}, nil
+	case domain.ProviderVLLM, domain.ProviderGemini, domain.ProviderBedrock, domain.ProviderClaude, domain.ProviderAzure, domain.ProviderChatGPT:
+		return newOpenAICompatibleClient(provider), nil
+	case domain.ProviderVertex:
+		return vertexClient{}, nil
+	default:
+		return nil, fmt.Errorf("unsupported provider %q", provider)
+	}
 }
 
 func ToolCatalog(mode domain.RunMode, role domain.AgentRole) []ToolDefinition {

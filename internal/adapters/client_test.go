@@ -24,7 +24,10 @@ func TestVLLMClientStreamsContentToolCallsAndUsage(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewVLLMClient()
+	client, err := NewClient(domain.ProviderVLLM)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
 	result, err := client.Chat(context.Background(), domain.ProviderSettings{
 		Endpoint: server.URL + "/v1",
 		Model:    "test-model",
@@ -57,7 +60,10 @@ func TestOllamaClientStreamsReasoningAndUsage(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient()
+	client, err := NewClient(domain.ProviderOllama)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
 	result, err := client.Chat(context.Background(), domain.ProviderSettings{
 		Endpoint: server.URL + "/v1",
 		Model:    "test-model",
@@ -98,8 +104,11 @@ func TestOllamaClientAppliesConfiguredReasoning(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient()
-	_, err := client.Chat(context.Background(), domain.ProviderSettings{
+	client, err := NewClient(domain.ProviderOllama)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	_, err = client.Chat(context.Background(), domain.ProviderSettings{
 		Endpoint:  server.URL + "/v1",
 		Model:     "qwen3.5-coder:32b",
 		Reasoning: "high",
@@ -109,6 +118,14 @@ func TestOllamaClientAppliesConfiguredReasoning(t *testing.T) {
 	}, nil)
 	if err != nil {
 		t.Fatalf("chat: %v", err)
+	}
+}
+
+func TestNewClientRejectsUnsupportedProvider(t *testing.T) {
+	t.Parallel()
+
+	if _, err := NewClient(domain.Provider("unknown")); err == nil {
+		t.Fatal("expected unsupported provider error")
 	}
 }
 

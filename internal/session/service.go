@@ -21,54 +21,6 @@ func NewService(manager *Manager) *Service {
 	return &Service{manager: manager}
 }
 
-func (s *Service) Create(
-	workspacePath string,
-	provider domain.Provider,
-	model string,
-	startedAt time.Time,
-	parentSessionID string,
-	parentRunID string,
-	parentTaskID string,
-	workerRole domain.AgentRole,
-	taskTitle string,
-	taskContract string,
-	taskStatus string,
-) (domain.SessionMetadata, error) {
-	return s.manager.Create(
-		workspacePath,
-		provider,
-		model,
-		startedAt,
-		parentSessionID,
-		parentRunID,
-		parentTaskID,
-		workerRole,
-		taskTitle,
-		taskContract,
-		taskStatus,
-	)
-}
-
-func (s *Service) LoadMetadata(sessionID string) (domain.SessionMetadata, error) {
-	return s.manager.LoadMetadata(sessionID)
-}
-
-func (s *Service) SaveMetadata(meta domain.SessionMetadata) error {
-	return s.manager.SaveMetadata(meta)
-}
-
-func (s *Service) ListSessions(limit int) ([]domain.SessionMetadata, error) {
-	return s.manager.ListSessions(limit)
-}
-
-func (s *Service) LatestSessionID() (string, error) {
-	return s.manager.LatestSessionID()
-}
-
-func (s *Service) Records(sessionID string) ([]domain.SessionRecord, error) {
-	return s.manager.LoadRecords(sessionID)
-}
-
 func (s *Service) AppendContextSnapshot(meta domain.SessionMetadata, runID string, snapshot domain.ContextSnapshot) (domain.SessionMetadata, error) {
 	return s.appendRecord(meta, domain.SessionRecord{
 		RunID:           runID,
@@ -152,11 +104,6 @@ func (s *Service) AppendTool(meta domain.SessionMetadata, runID string, result d
 		ToolName:   result.Name,
 		ToolCallID: result.ToolCallID,
 	})
-}
-
-func (s *Service) ShouldCompact(settings domain.Settings, meta domain.SessionMetadata) bool {
-	threshold := settings.CompactThresholdK * 1000
-	return threshold > 0 && meta.TokensSinceCompact >= threshold
 }
 
 func (s *Service) appendRecord(meta domain.SessionMetadata, record domain.SessionRecord) (domain.SessionMetadata, error) {

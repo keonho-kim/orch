@@ -34,7 +34,7 @@ func TestAppendChatHistoryUserAndAssistantWriteRollingEntries(t *testing.T) {
 		t.Fatalf("append assistant summary: %v", err)
 	}
 
-	content, err := service.ReadChatHistory()
+	content, err := manager.ReadChatHistory()
 	if err != nil {
 		t.Fatalf("read chat history: %v", err)
 	}
@@ -56,8 +56,7 @@ func TestAppendChatHistoryRejectsEmptySummary(t *testing.T) {
 	t.Parallel()
 
 	manager := NewManager(filepath.Join(t.TempDir(), ".orch", "sessions"))
-	service := NewService(manager)
-	err := service.AppendChatHistory(ChatHistoryEntry{
+	err := manager.AppendChatHistory(ChatHistoryEntry{
 		CreatedAt: time.Now(),
 		SessionID: "S1",
 		RunID:     "R1",

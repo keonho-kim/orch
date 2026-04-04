@@ -67,7 +67,7 @@ func (s *Service) loadBootstrapData(options BootOptions) (bootstrapData, error) 
 
 func (s *Service) resolveBootstrapSession(settings domain.Settings, options BootOptions) (domain.SessionMetadata, error) {
 	if strings.TrimSpace(options.RestoreSessionID) != "" {
-		currentSession, err := s.sessions.LoadMetadata(options.RestoreSessionID)
+		currentSession, err := s.sessionManager.LoadMetadata(options.RestoreSessionID)
 		if err != nil {
 			return domain.SessionMetadata{}, err
 		}
@@ -76,7 +76,7 @@ func (s *Service) resolveBootstrapSession(settings domain.Settings, options Boot
 		}
 		return currentSession, nil
 	}
-	currentSession, err := s.sessions.Create(
+	currentSession, err := s.sessionManager.Create(
 		s.paths.RepoRoot,
 		settings.DefaultProvider,
 		settings.ConfigFor(settings.DefaultProvider).Model,
@@ -128,7 +128,7 @@ func (s *Service) loadInheritedContext(options BootOptions) (session.Context, er
 		return session.Context{}, nil
 	}
 
-	meta, err := s.sessions.LoadMetadata(options.ParentSessionID)
+	meta, err := s.sessionManager.LoadMetadata(options.ParentSessionID)
 	if err != nil {
 		return session.Context{}, err
 	}

@@ -164,7 +164,6 @@ func TestStartAttachedAPIServerStartsAndPublishesDiscovery(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", home)
-	t.Setenv("ORCH_MANAGED_SETTINGS", filepath.Join(home, "managed-settings.json"))
 
 	repoRoot := t.TempDir()
 	app, err := newApp(repoRoot, "", orchestrator.BootOptions{})
@@ -196,7 +195,6 @@ func TestStartAttachedAPIServerFailureIsNonFatal(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", home)
-	t.Setenv("ORCH_MANAGED_SETTINGS", filepath.Join(home, "managed-settings.json"))
 
 	repoRoot := t.TempDir()
 	app, err := newApp(repoRoot, "", orchestrator.BootOptions{})

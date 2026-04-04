@@ -42,7 +42,7 @@ type Model struct {
 }
 
 type serviceUpdateMsg struct {
-	event orchestrator.UIEvent
+	event orchestrator.ServiceEvent
 }
 
 type operationErrMsg struct {

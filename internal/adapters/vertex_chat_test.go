@@ -81,7 +81,10 @@ func TestVertexClientStreamsTextToolCallsAndUsage(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewVertexClient()
+	client, err := NewClient(domain.ProviderVertex)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
 	result, err := client.Chat(context.Background(), domain.ProviderSettings{
 		Endpoint: server.URL + "/v1",
 		Model:    "gemini-2.5-pro",
