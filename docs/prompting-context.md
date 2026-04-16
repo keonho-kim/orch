@@ -1,46 +1,35 @@
-# Prompting Context
+# 실행 문맥
 
-## Default Prompt Inputs
+## 목적
 
-The default provider call now uses:
+`orch`는 모든 정보를 한 번에 밀어 넣는 방식 대신, 현재 실행에 필요한 정보만 골라 실행 문맥을 구성합니다.  
+이 원칙은 긴 저장소 문서나 전체 대화 기록 때문에 실행이 불안정해지는 일을 줄이기 위한 것입니다.
 
-- shared bootstrap `AGENTS.md`
-- role-specific system prompt
-- `bootstrap/TOOLS.md`
-- compact summary plus post-compact records
-- current user request or worker task contract
-- dynamically loaded evidence blocks when needed
+## 실행에 포함되는 정보
 
-## Removed From Default Runtime Prompting
+실행 문맥에는 보통 다음 정보가 포함됩니다.
 
-- `PRODUCT.md`
-- large repo-level developer guidance
-- full `chatHistory.md`
-- full skills index on every call
+- 현재 사용자 요청
+- 실행 모드와 역할
+- 제공자와 모델
+- 세션 요약
+- 최근 기록 일부
+- 현재 작업 계약
+- 선택된 참고 자료
+- 실행 시작 시점에 고정된 기억과 스킬 스냅샷
 
-## Dynamic Loading
+## 실행 중 고정되는 정보
 
-The runtime now prefers loading context only when needed:
+기억과 스킬은 실행 시작 시점의 상태로 고정됩니다.  
+실행 도중 새로 저장된 항목은 같은 실행 안에서 즉시 반영되지 않고, 다음 실행부터 사용됩니다.
 
-- `bootstrap/TOOLS.md`
-- selected skills
-- resolved references
-- bounded user memory from `bootstrap/USER.md`
-- bounded shared conversation memory from `.orch/chatHistory.md`
-- active cached plan for gateway runs
-- worker task title, contract, and task status
+## 기본 원칙
 
-## Role Split
+- 필요한 정보만 포함합니다.
+- 실행마다 현재 상태를 스냅샷으로 남깁니다.
+- 동일한 실행 안에서는 문맥이 흔들리지 않도록 유지합니다.
 
-### Gateway
+## 관찰 방법
 
-- interprets request
-- decomposes work
-- delegates worker tasks
-- synthesizes final answer
-
-### Worker
-
-- executes assigned contract only
-- does not re-delegate
-- returns bounded results
+현재 실행에 어떤 정보가 반영되었는지는 세션의 문맥 스냅샷으로 확인할 수 있습니다.  
+대화형 화면의 `/context` 명령이나 세션 기록을 통해 같은 정보를 점검할 수 있습니다.

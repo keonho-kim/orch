@@ -169,6 +169,12 @@ func (s *Service) forceCompactCurrentSession() error {
 		return err
 	}
 	s.setCurrentSessionIfActive(updated)
+	s.emitHookEvent(HookEvent{
+		Type:           hookSessionCompacted,
+		SessionID:      updated.SessionID,
+		SessionMeta:    updated,
+		SessionSummary: updated.Summary,
+	})
 	return nil
 }
 
@@ -213,6 +219,12 @@ func (s *Service) finalizeSessionByID(sessionID string) error {
 		return err
 	}
 	s.setCurrentSessionIfActive(updated)
+	s.emitHookEvent(HookEvent{
+		Type:           hookSessionFinalized,
+		SessionID:      updated.SessionID,
+		SessionMeta:    updated,
+		SessionSummary: updated.Summary,
+	})
 	return nil
 }
 
@@ -252,7 +264,17 @@ func (s *Service) runSessionMaintenance(sessionID string) {
 				return
 			}
 			s.setCurrentSessionIfActive(updated)
+<<<<<<< HEAD
 			s.publish(ServiceEvent{Type: "snapshot", SessionID: updated.SessionID, Message: "Session compacted."})
+=======
+			s.emitHookEvent(HookEvent{
+				Type:           hookSessionCompacted,
+				SessionID:      updated.SessionID,
+				SessionMeta:    updated,
+				SessionSummary: updated.Summary,
+			})
+			s.publish(UIEvent{Type: "snapshot", SessionID: updated.SessionID, Message: "Session compacted."})
+>>>>>>> cef7a8c (update)
 		}
 	}
 }

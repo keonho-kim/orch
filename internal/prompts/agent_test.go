@@ -48,6 +48,7 @@ func TestIterationContextIncludesRoleToolsAndTaskContract(t *testing.T) {
 		"worker tools",
 		"user context",
 		"recent chat history",
+		"frozen memory",
 		"$skill:\ncontent",
 		"- @README.md -> [README.md](/tmp/ws/README.md)",
 		domain.PlanCache{},

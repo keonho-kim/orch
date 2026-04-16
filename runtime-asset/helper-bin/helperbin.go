@@ -7,10 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-)
 
-const (
-	appDirName = "orch"
+	"github.com/keonho-kim/orch/internal/config"
 )
 
 //go:embed linux/amd64/rg linux/amd64/patch linux/arm64/rg linux/arm64/patch
@@ -28,12 +26,12 @@ func PrepareOTEnv(env []string, version string) ([]string, error) {
 		return next, nil
 	}
 
-	configDir, err := os.UserConfigDir()
+	orchHome, err := config.ResolveORCHHome()
 	if err != nil {
-		return nil, fmt.Errorf("resolve user config dir: %w", err)
+		return nil, err
 	}
 
-	prepared, err := prepareForPlatform(version, runtime.GOOS, runtime.GOARCH, configDir)
+	prepared, err := prepareForPlatform(version, runtime.GOOS, runtime.GOARCH, orchHome)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +43,7 @@ func PrepareOTEnv(env []string, version string) ([]string, error) {
 	return next, nil
 }
 
-func prepareForPlatform(version string, goos string, goarch string, configDir string) (Prepared, error) {
+func prepareForPlatform(version string, goos string, goarch string, orchHome string) (Prepared, error) {
 	if goos != "linux" {
 		return Prepared{}, nil
 	}
@@ -55,7 +53,7 @@ func prepareForPlatform(version string, goos string, goarch string, configDir st
 		return Prepared{}, err
 	}
 
-	root := helperRoot(configDir, version, platform)
+	root := helperRoot(orchHome, version, platform)
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return Prepared{}, fmt.Errorf("create helper directory %s: %w", root, err)
 	}
@@ -89,12 +87,12 @@ func platformDir(goos string, goarch string) (string, error) {
 	}
 }
 
-func helperRoot(configDir string, version string, platform string) string {
+func helperRoot(orchHome string, version string, platform string) string {
 	cleanVersion := strings.TrimSpace(version)
 	if cleanVersion == "" {
 		cleanVersion = "dev"
 	}
-	return filepath.Join(configDir, appDirName, "runtime", "bin", cleanVersion, platform)
+	return filepath.Join(strings.TrimSpace(orchHome), "runtime", "bin", cleanVersion, platform)
 }
 
 func ensureHelper(root string, goos string, goarch string, name string) (string, error) {

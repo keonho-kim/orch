@@ -152,21 +152,36 @@ func TestBuildSubagentResultTruncatesFailedOutput(t *testing.T) {
 	}
 }
 
-func TestParseCommandRejectsUnknownPositionalCommand(t *testing.T) {
+func TestParseCommandTreatsUnknownPositionalAsExec(t *testing.T) {
 	t.Parallel()
 
-	if _, err := parseCommand([]string{"abcdef"}); err == nil {
-		t.Fatal("expected unknown positional command to be rejected")
+	command, err := parseCommand([]string{"abcdef"})
+	if err != nil {
+		t.Fatalf("parse command: %v", err)
+	}
+	if command.name != "exec" || command.prompt != "abcdef" {
+		t.Fatalf("unexpected positional exec command: %+v", command)
 	}
 }
 
 func TestStartAttachedAPIServerStartsAndPublishesDiscovery(t *testing.T) {
+<<<<<<< HEAD
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", home)
 
 	repoRoot := t.TempDir()
 	app, err := newApp(repoRoot, "", orchestrator.BootOptions{})
+=======
+	orchHome := filepath.Join(t.TempDir(), ".orch-home")
+	t.Setenv("ORCH_HOME", orchHome)
+
+	repoRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir git dir: %v", err)
+	}
+	app, err := newApp(repoRoot, orchestrator.BootOptions{})
+>>>>>>> cef7a8c (update)
 	if err != nil {
 		t.Fatalf("new app: %v", err)
 	}
@@ -192,12 +207,23 @@ func TestStartAttachedAPIServerStartsAndPublishesDiscovery(t *testing.T) {
 }
 
 func TestStartAttachedAPIServerFailureIsNonFatal(t *testing.T) {
+<<<<<<< HEAD
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", home)
 
 	repoRoot := t.TempDir()
 	app, err := newApp(repoRoot, "", orchestrator.BootOptions{})
+=======
+	orchHome := filepath.Join(t.TempDir(), ".orch-home")
+	t.Setenv("ORCH_HOME", orchHome)
+
+	repoRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir git dir: %v", err)
+	}
+	app, err := newApp(repoRoot, orchestrator.BootOptions{})
+>>>>>>> cef7a8c (update)
 	if err != nil {
 		t.Fatalf("new app: %v", err)
 	}

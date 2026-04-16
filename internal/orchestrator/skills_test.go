@@ -70,7 +70,7 @@ func TestBuildIterationContextIncludesSelectedSkillsAndChatHistory(t *testing.T)
 		Name:    "alpha",
 		Path:    "bootstrap/skills/alpha/SKILL.md",
 		Content: "skill alpha",
-	}}, "- @README.md -> [README.md](/tmp/ws/README.md) at /tmp/ws/README.md", domain.PlanCache{}, "")
+	}}, "- @README.md -> [README.md](/tmp/ws/README.md) at /tmp/ws/README.md", domain.MemorySnapshot{}, domain.PlanCache{}, "")
 	if err != nil {
 		t.Fatalf("build iteration context: %v", err)
 	}

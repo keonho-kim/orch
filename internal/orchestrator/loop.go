@@ -10,6 +10,7 @@ import (
 
 	"github.com/keonho-kim/orch/domain"
 	"github.com/keonho-kim/orch/internal/adapters"
+	"github.com/keonho-kim/orch/internal/knowledge"
 	"github.com/keonho-kim/orch/internal/prompts"
 	"github.com/keonho-kim/orch/internal/session"
 	"github.com/keonho-kim/orch/internal/tooling"
@@ -23,6 +24,7 @@ type iterationInputs struct {
 	chatHistory        string
 	selectedSkills     []selectedSkill
 	resolvedReferences string
+	memorySnapshot     domain.MemorySnapshot
 	activePlan         domain.PlanCache
 	draftPlan          string
 	meta               domain.SessionMetadata
@@ -49,8 +51,85 @@ func (s *Service) executeRun(ctx context.Context, runID string) {
 		return
 	}
 
+<<<<<<< HEAD
 	for iteration := 1; iteration <= execution.limit; iteration++ {
 		nextExecution, terminated := s.runIteration(ctx, runID, execution, iteration)
+=======
+	limit := ralphLimit(snapshot.Settings, record.Mode)
+	for iteration := 1; iteration <= limit; iteration++ {
+		if err := s.setRunIteration(runID, iteration); err != nil {
+			return
+		}
+		if err := s.updateRunTask(runID, fmt.Sprintf("Ralph %d/%d", iteration, limit)); err != nil {
+			return
+		}
+
+		state, ok := s.state(runID)
+		if !ok {
+			return
+		}
+
+		inputs, err := s.loadIterationInputs(state.record, state.selectedSkills, state.resolvedRefs, state.memorySnapshot, snapshot.ActivePlan, strings.TrimSpace(state.draft))
+		if err != nil {
+			_ = s.failRun(runID, err)
+			return
+		}
+		contextMessage := inputs.prompt()
+		if err := s.appendSessionContextSnapshot(runID, inputs.snapshot()); err != nil {
+			_ = s.failRun(runID, err)
+			return
+		}
+		systemPrompt, err := s.buildSystemPrompt(state.record)
+		if err != nil {
+			_ = s.failRun(runID, err)
+			return
+		}
+
+		result, err := client.Chat(ctx, providerSettings, adapters.ChatRequest{
+			Model: record.Model,
+			Messages: append([]adapters.Message{
+				{Role: "system", Content: systemPrompt},
+				{Role: "system", Content: contextMessage},
+			}, messages...),
+			Tools: adapters.ToolCatalog(record.Mode, record.AgentRole),
+		}, func(delta adapters.Delta) error {
+			if delta.Reasoning != "" {
+				if err := s.appendThinking(runID, delta.Reasoning); err != nil {
+					return err
+				}
+			}
+			if delta.Content != "" {
+				if err := s.appendOutput(runID, delta.Content); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			if ctx.Err() != nil {
+				_ = s.cancelRun(runID, ctx.Err())
+				return
+			}
+			_ = s.failRun(runID, err)
+			return
+		}
+
+		s.setRunDraft(runID, result.Content)
+		if err := s.appendSessionAssistant(runID, result); err != nil {
+			_ = s.failRun(runID, err)
+			return
+		}
+		messages = append(messages, adapters.ToAssistantMessage(result))
+		if len(result.ToolCalls) == 0 {
+			_ = s.completeRun(runID)
+			return
+		}
+		terminated, err := s.executeToolCalls(ctx, runID, snapshot.Settings, result.ToolCalls, &messages)
+		if err != nil {
+			_ = s.failRun(runID, err)
+			return
+		}
+>>>>>>> cef7a8c (update)
 		if terminated {
 			return
 		}
@@ -532,6 +611,26 @@ func (s *Service) completeRun(runID string) error {
 	if record.AgentRole == domain.AgentRoleWorker {
 		_ = s.updateCurrentSessionTaskMetadata(domain.TaskStatusCompleted, content, nil, nil, nil, nil, "")
 	}
+	meta, outcome, outcomeErr := s.persistTaskOutcome(record)
+	if outcomeErr == nil {
+		s.emitHookEvent(HookEvent{
+			Type:           hookTaskCompleted,
+			SessionID:      record.SessionID,
+			RunID:          record.RunID,
+			RunRecord:      record,
+			SessionMeta:    meta,
+			Outcome:        outcome,
+			SessionSummary: meta.Summary,
+		})
+	}
+	s.emitHookEvent(HookEvent{
+		Type:           hookRunCompleted,
+		SessionID:      record.SessionID,
+		RunID:          record.RunID,
+		RunRecord:      record,
+		SessionMeta:    meta,
+		SessionSummary: meta.Summary,
+	})
 	go s.runChatHistoryAssistantSummary(record.SessionID, record.RunID, content)
 	go s.runSessionMaintenance(record.SessionID)
 	s.publish(ServiceEvent{Type: "run_updated", RunID: runID, Message: "Run completed."})
@@ -559,6 +658,17 @@ func (s *Service) failRun(runID string, err error) error {
 	}
 	if record.AgentRole == domain.AgentRoleWorker {
 		_ = s.updateCurrentSessionTaskMetadata(domain.TaskStatusFailed, err.Error(), nil, nil, nil, nil, "run_failed")
+	}
+	if meta, outcome, outcomeErr := s.persistTaskOutcome(record); outcomeErr == nil {
+		s.emitHookEvent(HookEvent{
+			Type:           hookTaskCompleted,
+			SessionID:      record.SessionID,
+			RunID:          record.RunID,
+			RunRecord:      record,
+			SessionMeta:    meta,
+			Outcome:        outcome,
+			SessionSummary: meta.Summary,
+		})
 	}
 	_ = s.appendRunEvent(runID, "error", err.Error())
 	s.publish(ServiceEvent{Type: "run_updated", RunID: runID, Message: err.Error()})
@@ -591,6 +701,17 @@ func (s *Service) cancelRun(runID string, err error) error {
 	}
 	if record.AgentRole == domain.AgentRoleWorker {
 		_ = s.updateCurrentSessionTaskMetadata(domain.TaskStatusCancelled, message, nil, nil, nil, nil, "")
+		if meta, outcome, outcomeErr := s.persistTaskOutcome(record); outcomeErr == nil {
+			s.emitHookEvent(HookEvent{
+				Type:           hookTaskCompleted,
+				SessionID:      record.SessionID,
+				RunID:          record.RunID,
+				RunRecord:      record,
+				SessionMeta:    meta,
+				Outcome:        outcome,
+				SessionSummary: meta.Summary,
+			})
+		}
 	}
 	_ = s.appendRunEvent(runID, "cancel", message)
 	s.publish(ServiceEvent{Type: "run_updated", RunID: runID, Message: message})
@@ -605,7 +726,7 @@ func (s *Service) state(runID string) (*runState, bool) {
 	return state, ok
 }
 
-func (s *Service) loadIterationInputs(record domain.RunRecord, selectedSkills []selectedSkill, resolvedReferences string, activePlan domain.PlanCache, draftPlan string) (iterationInputs, error) {
+func (s *Service) loadIterationInputs(record domain.RunRecord, selectedSkills []selectedSkill, resolvedReferences string, memorySnapshot domain.MemorySnapshot, activePlan domain.PlanCache, draftPlan string) (iterationInputs, error) {
 	toolsDoc, err := readWorkspaceFile(record.WorkspacePath, filepath.Join("bootstrap", "TOOLS.md"))
 	if err != nil {
 		return iterationInputs{}, err
@@ -643,6 +764,7 @@ func (s *Service) loadIterationInputs(record domain.RunRecord, selectedSkills []
 		chatHistory:        chatHistory,
 		selectedSkills:     selectedSkills,
 		resolvedReferences: resolvedReferences,
+		memorySnapshot:     memorySnapshot,
 		activePlan:         activePlan,
 		draftPlan:          draftPlan,
 		meta:               meta,
@@ -651,8 +773,8 @@ func (s *Service) loadIterationInputs(record domain.RunRecord, selectedSkills []
 	}, nil
 }
 
-func (s *Service) buildIterationContext(record domain.RunRecord, selectedSkills []selectedSkill, resolvedReferences string, activePlan domain.PlanCache, draftPlan string) (string, error) {
-	inputs, err := s.loadIterationInputs(record, selectedSkills, resolvedReferences, activePlan, draftPlan)
+func (s *Service) buildIterationContext(record domain.RunRecord, selectedSkills []selectedSkill, resolvedReferences string, memorySnapshot domain.MemorySnapshot, activePlan domain.PlanCache, draftPlan string) (string, error) {
+	inputs, err := s.loadIterationInputs(record, selectedSkills, resolvedReferences, memorySnapshot, activePlan, draftPlan)
 	if err != nil {
 		return "", err
 	}
@@ -749,6 +871,7 @@ func (i iterationInputs) prompt() string {
 		i.toolsDoc,
 		i.userMemory,
 		i.chatHistory,
+		knowledge.RenderPrompt(i.memorySnapshot),
 		formatSelectedSkills(i.selectedSkills),
 		i.resolvedReferences,
 		i.activePlan,
@@ -776,6 +899,8 @@ func (i iterationInputs) snapshot() domain.ContextSnapshot {
 		UserMemoryPresent:       strings.TrimSpace(i.userMemory) != "",
 		ChatHistoryExcerptBytes: len(i.chatHistory),
 		PlanCachePresent:        strings.TrimSpace(i.activePlan.Content) != "",
+		FrozenMemoryEntryCount:  len(i.memorySnapshot.Entries),
+		FrozenSkillCount:        len(i.memorySnapshot.Skills),
 	}
 }
 

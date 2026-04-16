@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 
 	"github.com/keonho-kim/orch/domain"
@@ -289,12 +288,33 @@ func applyOpenAICompatibleAuth(request *http.Request, provider domain.Provider, 
 	}
 }
 
+<<<<<<< HEAD
 func requiredAPIKey(settings domain.ProviderSettings, provider domain.Provider) (string, error) {
 	apiKey := strings.TrimSpace(settings.APIKey)
 	if apiKey == "" {
 		return "", fmt.Errorf("%s API key is not configured", provider.DisplayName())
 	}
 	return apiKey, nil
+=======
+func optionalAPIKey(settings domain.ProviderSettings) (string, error) {
+	settings.Auth = settings.Auth.Normalize(domain.ProviderVLLM)
+	if settings.Auth.Kind == domain.ProviderAuthNone {
+		return "", nil
+	}
+	value, err := settings.Auth.Resolve(domain.ProviderVLLM)
+	if err != nil {
+		if settings.Auth.Kind == domain.ProviderAuthEnv && strings.Contains(err.Error(), "is not set") {
+			return "", nil
+		}
+		return "", err
+	}
+	return value, nil
+}
+
+func requiredAPIKey(settings domain.ProviderSettings, provider domain.Provider) (string, error) {
+	settings.Auth = settings.Auth.Normalize(provider)
+	return settings.Auth.Resolve(provider)
+>>>>>>> cef7a8c (update)
 }
 
 func readOpenAICompatibleStream(response *http.Response, onDelta DeltaHandler) (ChatResult, error) {

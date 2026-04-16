@@ -80,6 +80,27 @@ func TestReviewRejectsGatewayWrite(t *testing.T) {
 	}
 }
 
+func TestReviewRejectsWorkerMemoryCommit(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	executor := NewExecutor()
+	record := domain.RunRecord{
+		Mode:          domain.RunModeReact,
+		AgentRole:     domain.AgentRoleWorker,
+		WorkspacePath: workspace,
+		CurrentCwd:    workspace,
+	}
+
+	_, err := executor.Review(workspace, record, nil, domain.Settings{}, domain.ToolCall{
+		Name:      "ot",
+		Arguments: `{"op":"memory_commit","memory_kind":"task_lessons","memory_title":"x","memory_content":"y"}`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "worker role does not allow") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestReviewPlanModeOnlyAllowsReadListSearch(t *testing.T) {
 	t.Parallel()
 
@@ -128,6 +149,24 @@ func TestExecuteContextTaskListAndTaskGetUseResolvers(t *testing.T) {
 		func(record domain.RunRecord, taskID string) (domain.TaskView, error) {
 			return domain.TaskView{TaskID: taskID, ChildSessionID: record.SessionID}, nil
 		},
+		func(record domain.RunRecord, query string, limit int) ([]domain.SessionSearchResult, error) {
+			return []domain.SessionSearchResult{{SessionID: record.SessionID, SelectionReason: query}}, nil
+		},
+		func(record domain.RunRecord, query string, limit int) ([]domain.MemorySearchResult, error) {
+			return []domain.MemorySearchResult{{Entry: domain.MemoryEntry{ID: 1, Title: query}}}, nil
+		},
+		func(record domain.RunRecord, status string, limit int) ([]domain.SkillRecord, error) {
+			return []domain.SkillRecord{{SkillID: "skill-1", Status: domain.SkillStatus(status)}}, nil
+		},
+		func(record domain.RunRecord, skillID string) (domain.SkillRecord, error) {
+			return domain.SkillRecord{SkillID: skillID}, nil
+		},
+		func(record domain.RunRecord, request domain.OTRequest) (domain.MemoryEntry, error) {
+			return domain.MemoryEntry{Title: request.MemoryTitle}, nil
+		},
+		func(record domain.RunRecord, request domain.OTRequest) (domain.SkillRecord, error) {
+			return domain.SkillRecord{Name: request.SkillName}, nil
+		},
 	)
 
 	record := domain.RunRecord{
@@ -170,6 +209,68 @@ func TestExecuteContextTaskListAndTaskGetUseResolvers(t *testing.T) {
 	}
 	if !strings.Contains(getExec.Output, `"task_id": "task-1"`) {
 		t.Fatalf("unexpected task get output: %q", getExec.Output)
+	}
+}
+
+func TestExecuteSessionSearchMemorySearchSkillOpsUseResolvers(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	executor := NewExecutor()
+	executor.SetStateResolvers(
+		func(record domain.RunRecord) (domain.ContextSnapshot, error) { return domain.ContextSnapshot{}, nil },
+		func(record domain.RunRecord, statusFilter string) ([]domain.TaskView, error) { return nil, nil },
+		func(record domain.RunRecord, taskID string) (domain.TaskView, error) { return domain.TaskView{}, nil },
+		func(record domain.RunRecord, query string, limit int) ([]domain.SessionSearchResult, error) {
+			return []domain.SessionSearchResult{{SessionID: record.SessionID, SelectionReason: query}}, nil
+		},
+		func(record domain.RunRecord, query string, limit int) ([]domain.MemorySearchResult, error) {
+			return []domain.MemorySearchResult{{Entry: domain.MemoryEntry{Title: query}}}, nil
+		},
+		func(record domain.RunRecord, status string, limit int) ([]domain.SkillRecord, error) {
+			return []domain.SkillRecord{{SkillID: "skill-1", Status: domain.SkillStatusDraft}}, nil
+		},
+		func(record domain.RunRecord, skillID string) (domain.SkillRecord, error) {
+			return domain.SkillRecord{SkillID: skillID}, nil
+		},
+		func(record domain.RunRecord, request domain.OTRequest) (domain.MemoryEntry, error) {
+			return domain.MemoryEntry{Title: request.MemoryTitle}, nil
+		},
+		func(record domain.RunRecord, request domain.OTRequest) (domain.SkillRecord, error) {
+			return domain.SkillRecord{Name: request.SkillName}, nil
+		},
+	)
+
+	record := domain.RunRecord{
+		RunID:         "R1",
+		SessionID:     "S1",
+		Mode:          domain.RunModeReact,
+		AgentRole:     domain.AgentRoleGateway,
+		WorkspacePath: workspace,
+		CurrentCwd:    workspace,
+	}
+
+	for _, tc := range []struct {
+		call string
+		want string
+	}{
+		{`{"op":"session_search","query":"snapshot"}`, `"selection_reason": "snapshot"`},
+		{`{"op":"memory_search","query":"lesson"}`, `"title": "lesson"`},
+		{`{"op":"skill_list"}`, `"skill_id": "skill-1"`},
+		{`{"op":"skill_get","skill_id":"skill-1"}`, `"skill_id": "skill-1"`},
+		{`{"op":"memory_commit","memory_kind":"task_lessons","memory_title":"lesson","memory_content":"body"}`, `"title": "lesson"`},
+		{`{"op":"skill_propose","skill_name":"frozen-memory","skill_summary":"summary","skill_content":"content"}`, `"name": "frozen-memory"`},
+	} {
+		got, err := executor.Execute(context.Background(), workspace, record, nil, domain.ToolCall{
+			Name:      "ot",
+			Arguments: tc.call,
+		})
+		if err != nil {
+			t.Fatalf("execute %s: %v", tc.call, err)
+		}
+		if !strings.Contains(got.Output, tc.want) {
+			t.Fatalf("unexpected output for %s: %q", tc.call, got.Output)
+		}
 	}
 }
 

@@ -19,7 +19,13 @@ func Run(args []string) error {
 	case "config-list":
 		return runConfigList(command.repoRoot, command.configFile, os.Stdout)
 	case "config-set":
+<<<<<<< HEAD
 		return runConfigUpdate(command.repoRoot, command.configFile, command.configCommand)
+=======
+		return runConfigUpdate(command.repoRoot, command.configCommand)
+	case "config-migrate":
+		return runConfigMigrate(command.repoRoot)
+>>>>>>> cef7a8c (update)
 	case "__finalize-session":
 		return runFinalizeSession(command.repoRoot, command.finalizeSession)
 	case "__subagent-run":

@@ -17,7 +17,7 @@ import (
 
 const (
 	defaultProviderKey = "default_provider"
-	schemaVersion      = 4
+	schemaVersion      = 5
 )
 
 type Store struct {

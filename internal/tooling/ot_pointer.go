@@ -24,18 +24,26 @@ func (r *OTRunner) runPointer(workspaceRoot string, record domain.RunRecord, ins
 		return "", fmt.Errorf("ot pointer requires an active session")
 	}
 
+<<<<<<< HEAD
 	repoRoot, err := resolveSubagentRepoRoot(workspaceRoot)
 	if err != nil {
 		return "", err
 	}
 	path := filepath.Join(repoRoot, ".orch", "sessions", sessionID+".jsonl")
+=======
+	path := filepath.Join(filepath.Dir(workspaceRoot), "sessions", sessionID+".jsonl")
+>>>>>>> cef7a8c (update)
 	file, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("open pointer session file: %w", err)
 	}
+<<<<<<< HEAD
 	defer func() {
 		_ = file.Close()
 	}()
+=======
+	defer file.Close()
+>>>>>>> cef7a8c (update)
 
 	lineSet := make(map[int64]struct{}, len(pointer.Lines))
 	for _, line := range pointer.Lines {

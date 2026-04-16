@@ -212,23 +212,19 @@ func TestResolveSubagentRepoRootDoesNotRequireProjectSettingsFile(t *testing.T) 
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	bootstrapDir := filepath.Join(repoRoot, "runtime-asset", "bootstrap")
-	if err := os.MkdirAll(bootstrapDir, 0o755); err != nil {
-		t.Fatalf("create bootstrap dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(bootstrapDir, "AGENTS.md"), []byte("# test\n"), 0o644); err != nil {
-		t.Fatalf("write AGENTS.md: %v", err)
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("create git dir: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(repoRoot, "go.mod"), []byte("module example.com/test\n"), 0o644); err != nil {
 		t.Fatalf("write go.mod: %v", err)
 	}
 
-	workspace := filepath.Join(repoRoot, "test-workspace", "nested")
+	workspace := filepath.Join(repoRoot, ".orch", "workspaces", "workspace-1", "runtime", "nested")
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
 
-	resolved, err := resolveSubagentRepoRoot(workspace)
+	resolved, err := resolveSubagentRepoRoot(workspace, []string{"OT_REPO_ROOT=" + filepath.Join(repoRoot, "nested", "..")})
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
 	}

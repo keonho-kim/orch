@@ -56,8 +56,19 @@ func TestSettingsMissingProviderFieldsAreProviderSpecific(t *testing.T) {
 func TestSettingsNormalizeAppliesDefaultEndpoints(t *testing.T) {
 	t.Parallel()
 
+<<<<<<< HEAD
 	settings := Settings{}
 	settings.Normalize()
+=======
+	settings := Settings{
+		Providers: ProviderCatalog{
+			VLLM:    ProviderSettings{Auth: ProviderAuth{Kind: ProviderAuthEnv, Env: "VLLM_API_KEY"}},
+			Gemini:  ProviderSettings{Auth: ProviderAuth{Kind: ProviderAuthEnv, Env: "GEMINI_API_KEY"}},
+			Claude:  ProviderSettings{Auth: ProviderAuth{Kind: ProviderAuthEnv, Env: "ANTHROPIC_API_KEY"}},
+			ChatGPT: ProviderSettings{Auth: ProviderAuth{Kind: ProviderAuthEnv, Env: "OPENAI_API_KEY"}},
+		},
+	}
+>>>>>>> cef7a8c (update)
 
 	if settings.Providers.Ollama.Endpoint != "http://localhost:11434/v1" {
 		t.Fatalf("unexpected Ollama endpoint: %q", settings.Providers.Ollama.Endpoint)

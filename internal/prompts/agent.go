@@ -56,6 +56,7 @@ func IterationContext(
 	tools string,
 	user string,
 	chatHistory string,
+	frozenKnowledge string,
 	selectedSkills string,
 	resolvedReferences string,
 	activePlan domain.PlanCache,
@@ -76,6 +77,9 @@ func IterationContext(
 	}
 	if strings.TrimSpace(chatHistory) != "" {
 		sections = append(sections, ".orch/chatHistory.md:\n"+strings.TrimSpace(chatHistory))
+	}
+	if strings.TrimSpace(frozenKnowledge) != "" {
+		sections = append(sections, "Frozen memory snapshot:\n"+strings.TrimSpace(frozenKnowledge))
 	}
 	if strings.TrimSpace(taskTitle) != "" {
 		sections = append(sections, "Assigned task title:\n"+strings.TrimSpace(taskTitle))

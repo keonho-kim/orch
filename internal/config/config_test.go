@@ -9,24 +9,41 @@ import (
 	"github.com/keonho-kim/orch/domain"
 )
 
-func TestResolvePaths(t *testing.T) {
-	setTestConfigHome(t)
+func TestResolvePathsUsesORCHHomeAndGlobalWorkspaceState(t *testing.T) {
+	orchHome := filepath.Join(t.TempDir(), ".orch-home")
+	t.Setenv("ORCH_HOME", orchHome)
+	configHome := filepath.Join(t.TempDir(), ".config-home")
+	t.Setenv("HOME", configHome)
+	t.Setenv("XDG_CONFIG_HOME", configHome)
 
 	repoRoot := t.TempDir()
 	paths, err := ResolvePaths(repoRoot)
 	if err != nil {
 		t.Fatalf("resolve paths: %v", err)
 	}
-	if paths.TestWorkspace != filepath.Join(repoRoot, "test-workspace") {
-		t.Fatalf("unexpected test workspace path: %s", paths.TestWorkspace)
+	if paths.ORCHHome != orchHome {
+		t.Fatalf("unexpected ORCH home: %q", paths.ORCHHome)
+	}
+	if paths.GlobalSettingsFile != filepath.Join(orchHome, settingsFileName) {
+		t.Fatalf("unexpected global settings file: %q", paths.GlobalSettingsFile)
+	}
+	if filepath.Dir(paths.TestWorkspace) != filepath.Join(orchHome, "workspaces", paths.WorkspaceID) {
+		t.Fatalf("unexpected workspace runtime path: %q", paths.TestWorkspace)
+	}
+	if paths.SessionsDir != filepath.Join(orchHome, "workspaces", paths.WorkspaceID, "sessions") {
+		t.Fatalf("unexpected sessions dir: %q", paths.SessionsDir)
 	}
 	if paths.ConfigFile != filepath.Join(repoRoot, "orch.toml") {
 		t.Fatalf("unexpected config file path: %s", paths.ConfigFile)
 	}
 }
 
-func TestSaveAndLoadSettings(t *testing.T) {
-	setTestConfigHome(t)
+func TestSaveAndLoadSettingsRoundTripThroughProjectTOML(t *testing.T) {
+	orchHome := filepath.Join(t.TempDir(), ".orch-home")
+	t.Setenv("ORCH_HOME", orchHome)
+	configHome := filepath.Join(t.TempDir(), ".config-home")
+	t.Setenv("HOME", configHome)
+	t.Setenv("XDG_CONFIG_HOME", configHome)
 
 	repoRoot := t.TempDir()
 	paths, err := ResolvePaths(repoRoot)
@@ -37,6 +54,7 @@ func TestSaveAndLoadSettings(t *testing.T) {
 	settings := domain.Settings{
 		DefaultProvider: domain.ProviderChatGPT,
 		Providers: domain.ProviderCatalog{
+<<<<<<< HEAD
 			Ollama: domain.ProviderSettings{
 				Endpoint:  "http://localhost:11434/v1",
 				Model:     "qwen2.5-coder",
@@ -47,6 +65,16 @@ func TestSaveAndLoadSettings(t *testing.T) {
 				Model:     "gpt-5.3-codex",
 				APIKey:    "secret-openai-key",
 				Reasoning: "xhigh",
+=======
+			ChatGPT: domain.ProviderSettings{
+				BaseURL: "https://api.openai.com/v1",
+				Model:   "gpt-4.1",
+				Auth: domain.ProviderAuth{
+					Kind:  domain.ProviderAuthEnv,
+					Env:   "OPENAI_API_KEY",
+					Value: "",
+				},
+>>>>>>> cef7a8c (update)
 			},
 		},
 		ApprovalPolicy:    domain.ApprovalConfirmMutations,
@@ -55,6 +83,7 @@ func TestSaveAndLoadSettings(t *testing.T) {
 		PlanRalphIter:     7,
 		CompactThresholdK: 150,
 	}
+
 	if err := SaveSettings(paths, settings); err != nil {
 		t.Fatalf("save settings: %v", err)
 	}
@@ -66,26 +95,43 @@ func TestSaveAndLoadSettings(t *testing.T) {
 	if loaded.DefaultProvider != domain.ProviderChatGPT {
 		t.Fatalf("unexpected default provider: %s", loaded.DefaultProvider)
 	}
+<<<<<<< HEAD
 	if loaded.ConfigFor(domain.ProviderOllama).Reasoning != "high" {
 		t.Fatalf("unexpected ollama reasoning: %q", loaded.ConfigFor(domain.ProviderOllama).Reasoning)
 	}
 	if loaded.ConfigFor(domain.ProviderChatGPT).APIKey != "secret-openai-key" {
 		t.Fatalf("unexpected ChatGPT API key: %q", loaded.ConfigFor(domain.ProviderChatGPT).APIKey)
+=======
+	if loaded.ConfigFor(domain.ProviderChatGPT).Model != "gpt-4.1" {
+		t.Fatalf("unexpected model: %s", loaded.ConfigFor(domain.ProviderChatGPT).Model)
+	}
+	if loaded.ConfigFor(domain.ProviderChatGPT).Auth.Env != "OPENAI_API_KEY" {
+		t.Fatalf("unexpected auth env: %s", loaded.ConfigFor(domain.ProviderChatGPT).Auth.Env)
+>>>>>>> cef7a8c (update)
 	}
 	if !loaded.SelfDrivingMode {
 		t.Fatal("expected self-driving mode to round-trip")
 	}
 }
 
+<<<<<<< HEAD
 func TestLoadDocumentReturnsDefaultDocumentWithoutConfigFile(t *testing.T) {
 	setTestConfigHome(t)
+=======
+func TestDiscoverRepoRootFindsNearestConfigOrGitRoot(t *testing.T) {
+	t.Parallel()
+>>>>>>> cef7a8c (update)
 
 	repoRoot := t.TempDir()
-	paths, err := ResolvePaths(repoRoot)
-	if err != nil {
-		t.Fatalf("resolve paths: %v", err)
+	nested := filepath.Join(repoRoot, "a", "b", "c")
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir git: %v", err)
+	}
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
 	}
 
+<<<<<<< HEAD
 	document, err := LoadDocument(paths)
 	if err != nil {
 		t.Fatalf("load document: %v", err)
@@ -167,3 +213,13 @@ func setTestConfigHome(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", home)
 }
+=======
+	discovered, err := DiscoverRepoRoot(nested)
+	if err != nil {
+		t.Fatalf("discover repo root: %v", err)
+	}
+	if discovered != repoRoot {
+		t.Fatalf("unexpected discovered repo root: %q", discovered)
+	}
+}
+>>>>>>> cef7a8c (update)

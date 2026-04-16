@@ -1,19 +1,18 @@
 package cli
 
 import (
-	"context"
 	"flag"
-	"fmt"
-	"io"
-	"path/filepath"
 	"strings"
 
 	"github.com/keonho-kim/orch/domain"
 	"github.com/keonho-kim/orch/internal/config"
-	sqlitestore "github.com/keonho-kim/orch/internal/store/sqlite"
 )
 
+<<<<<<< HEAD
 const configUsage = "usage: orch config --list [--workspace <path>] [--env-file <path>] | orch config [--workspace <path>] [--env-file <path>] --provider=<provider> [--model=<name>] [--reasoning=<true|false|low|medium|high|xhigh>] [--endpoint=<url>] [--api-key=<secret>] [--approval-policy=<policy>] [--self-driving-mode=<true|false>] [--react-ralph-iter=<n>] [--plan-ralph-iter=<n>] [--compact-threshold-k=<n>]"
+=======
+const configUsage = "usage: orch config --list [--workspace <path>] [--scope <global|project|effective>] [--show-origin] | orch config [--workspace <path>] [--scope <global|project>] [--provider=<provider>] [--model=<name>] [--unset <key>] [provider flags...] | orch config migrate [--workspace <path>]"
+>>>>>>> cef7a8c (update)
 
 type configCommandState struct {
 	list  bool
@@ -116,6 +115,7 @@ func visitedConfigFlags(flagSet *flag.FlagSet) map[string]bool {
 	})
 	return visited
 }
+<<<<<<< HEAD
 
 func validateListOnlyFlags(visited map[string]bool) error {
 	for key := range visited {
@@ -305,3 +305,5 @@ func resolveAppPaths(repoRoot string, configFile string) (config.Paths, error) {
 	}
 	return paths, nil
 }
+=======
+>>>>>>> cef7a8c (update)

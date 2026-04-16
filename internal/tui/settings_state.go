@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -472,12 +471,4 @@ func settingsFieldsForGroup(group settingsFieldGroup) []settingsField {
 
 func settingsFieldLabel(field settingsField) string {
 	return settingsFieldSpecs[field].label
-}
-
-func parsePositiveInt(raw string, fallback int) int {
-	value, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || value <= 0 {
-		return fallback
-	}
-	return value
 }

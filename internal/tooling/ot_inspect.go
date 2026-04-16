@@ -9,6 +9,7 @@ import (
 	"github.com/keonho-kim/orch/domain"
 )
 
+<<<<<<< HEAD
 type otInspection struct {
 	Subcommand      string
 	NormalizedArgs  []string
@@ -27,6 +28,8 @@ var supportedOTSubcommands = map[string]struct{}{
 	"write":    {},
 }
 
+=======
+>>>>>>> cef7a8c (update)
 func inspectOTRequest(workspaceRoot string, record domain.RunRecord, request domain.ExecRequest) (otInspection, error) {
 	if len(request.Args) == 0 {
 		return otInspection{}, fmt.Errorf("ot requires a subcommand")
@@ -190,7 +193,14 @@ func inspectOTWrite(workspaceRoot string, record domain.RunRecord, args []string
 }
 
 func inspectReadOnlyTarget(workspaceRoot string, base string, rawPath string) (string, os.FileInfo, bool, error) {
+<<<<<<< HEAD
 	resolved := resolveInspectablePath(base, rawPath)
+=======
+	resolved, err := resolveInspectablePath(base, rawPath)
+	if err != nil {
+		return "", nil, false, err
+	}
+>>>>>>> cef7a8c (update)
 
 	info, err := os.Stat(resolved)
 	if err != nil {
@@ -220,6 +230,7 @@ func normalizedReadOnlyArgs(workspaceRoot string, resolved string, withinWorkspa
 	}
 }
 
+<<<<<<< HEAD
 func parseOTReadArgs(args []string) (string, string, string, error) {
 	path := ""
 	start := ""
@@ -398,6 +409,18 @@ func resolveInspectablePath(base string, raw string) string {
 		return filepath.Clean(cleaned)
 	}
 	return filepath.Clean(filepath.Join(base, cleaned))
+=======
+func resolveInspectablePath(base string, raw string) (string, error) {
+	cleaned := strings.TrimSpace(raw)
+	if cleaned == "" || cleaned == "." {
+		return filepath.Clean(base), nil
+	}
+
+	if filepath.IsAbs(cleaned) {
+		return filepath.Clean(cleaned), nil
+	}
+	return filepath.Clean(filepath.Join(base, cleaned)), nil
+>>>>>>> cef7a8c (update)
 }
 
 func isPathInsideWorkspace(workspaceRoot string, path string) bool {

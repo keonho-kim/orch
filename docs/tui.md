@@ -1,7 +1,8 @@
-# TUI
+# TUI 안내
 
 ## 개요
 
+<<<<<<< HEAD
 TUI는 `orch`의 기본 운영 인터페이스입니다. `orch exec`와 같은 orchestrator 서비스를 사용하지만, 세션 복원, 승인 모달, 설정 편집, 로컬 API 노출을 함께 제공합니다.
 
 대화형 TUI 실행 시 `.orch/api/current.json`에 로컬 API 연결 정보가 기록됩니다.
@@ -31,14 +32,41 @@ TUI는 `orch`의 기본 운영 인터페이스입니다. `orch exec`와 같은 o
 ## Composer 모드
 
 입력기는 두 가지 고정 모드를 가집니다.
+=======
+TUI는 `orch`의 기본 대화형 화면입니다.  
+단발성 실행과 같은 오케스트레이터를 사용하지만, 세션 탐색, 승인 처리, 설정 편집, 상태 확인 기능을 함께 제공합니다.
+
+`orch`를 인자 없이 실행하면 TUI가 열립니다.  
+`orch history`도 같은 TUI를 사용하되, 세션 선택 화면부터 시작합니다.
+
+## 화면 구성
+
+| 영역 | 설명 |
+| --- | --- |
+| 타임라인 | 사용자 입력, 응답, 도구 결과, 진행 상태 |
+| 입력창 | 요청 작성과 전송 |
+| 상태 표시 | 현재 모드, 제공자, 모델, 알림 메시지 |
+| 모달 화면 | 승인, 설정, 세션 이력, 종료 확인 |
+
+## 실행 모드
+
+입력창은 두 가지 모드를 지원합니다.
+>>>>>>> cef7a8c (update)
 
 - `ReAct Deep Agent`
 - `Plan`
 
+<<<<<<< HEAD
 `Shift+Tab`으로 전환합니다.
+=======
+`Shift+Tab`으로 모드를 전환할 수 있습니다.
 
-## Slash Commands
+## 슬래시 명령
+>>>>>>> cef7a8c (update)
 
+입력이 `/`로 시작하면 명령 선택 화면이 열립니다.
+
+<<<<<<< HEAD
 입력이 `/`로 시작하면 composer 위에 slash command 메뉴가 열립니다.
 
 현재 명령:
@@ -57,12 +85,36 @@ TUI는 `orch`의 기본 운영 인터페이스입니다. `orch exec`와 같은 o
 도구 실행에 승인이 필요하면 대시보드 대신 approval 화면이 표시됩니다.
 
 표시 정보:
+=======
+현재 지원하는 명령은 다음과 같습니다.
 
-- run id
-- tool name
-- approval reason
-- raw tool arguments
+- `/clear`
+- `/compact`
+- `/context`
+- `/exit`
+- `/status`
+- `/tasks`
 
+## 승인 처리
+
+승인이 필요한 도구 호출이 발생하면 승인 화면이 나타납니다.
+
+화면에는 다음 정보가 표시됩니다.
+
+- 실행 ID
+- 도구 이름
+- 승인 사유
+- 도구 인자
+
+조작은 다음과 같습니다.
+
+- `Enter` 또는 `Y`: 승인
+- `Esc` 또는 `N`: 거부
+>>>>>>> cef7a8c (update)
+
+## 세션 이력
+
+<<<<<<< HEAD
 조작:
 
 - `Enter` 또는 `Y`: 승인
@@ -93,10 +145,32 @@ TUI는 `orch`의 기본 운영 인터페이스입니다. `orch exec`와 같은 o
 - provider별 `model`
 - provider별 `api_key`
 - provider별 `reasoning`
+=======
+`orch history`를 실행하면 저장된 세션 목록을 바로 확인할 수 있습니다.
+
+- `Up` / `Down`: 이동
+- `Enter`: 선택한 세션 복원
+- `Esc`: 닫기
+
+세션 목록에는 제목, 세션 ID, 제공자, 모델, 작업 상태 같은 핵심 정보가 표시됩니다.
+
+## 설정 화면
+
+`Ctrl+S`로 설정 화면을 엽니다.
+
+설정 화면에서는 다음 항목을 다룰 수 있습니다.
+
+- 기본 제공자
+- `self_driving_mode`
+- 제공자별 `base_url`
+- 제공자별 `model`
+- 제공자별 인증 환경 변수 이름
+>>>>>>> cef7a8c (update)
 - `react_ralph_iter`
 - `plan_ralph_iter`
 - `compact_threshold_k`
 
+<<<<<<< HEAD
 설정 UI는 더 이상 scope 탭을 사용하지 않습니다. 단일 `orch.toml` 문서를 직접 편집하는 구조입니다.
 
 설정 필드 구성은 provider별 개별 enum 나열이 아니라 schema 기반으로 생성됩니다.
@@ -155,3 +229,43 @@ reasoning은 TUI에서만 보이며 세션 transcript 파일에는 저장되지 
 - 활성 run이 있는 동안에는 새 세션을 열지 않습니다.
 
 `/exit`는 정상 종료 경로입니다. 활성 run이 있으면 먼저 확인 모달이 열립니다.
+=======
+첫 설정이 필요한 경우에는 초기 설정 화면이 먼저 열립니다.  
+이때 저장한 값은 전역 설정 파일에 기록됩니다.
+
+설정 파일 기준 범위는 다음 세 가지로 이해하면 됩니다.
+
+- 전역 설정: `ORCH_HOME/orch.env.toml`
+- 프로젝트 설정: `<repo>/orch.env.toml`
+- 적용 결과: 전역과 프로젝트를 합친 현재 값
+
+CLI에서도 같은 내용을 확인할 수 있습니다.
+
+```bash
+orch config --list --scope global
+orch config --list --scope project
+orch config --list --scope effective
+```
+
+## 로컬 API 서버
+
+대화형 TUI 세션이 시작되면 같은 프로세스 안에서 로컬 API 서버가 열립니다.
+
+- 바인드 주소: `127.0.0.1:<ephemeral-port>`
+- 인증: `Authorization: Bearer <token>`
+- discovery 파일:
+  - `ORCH_HOME/workspaces/<workspace-id>/api/current.json`
+  - `ORCH_HOME/workspaces/<workspace-id>/api/<session-id>.json`
+
+세션이 끝나면 이 서버도 함께 내려갑니다.
+
+## 주요 단축키
+
+| 키 | 동작 |
+| --- | --- |
+| `Ctrl+S` | 설정 화면 열기 |
+| `Ctrl+T` | 활성 실행의 사고 과정 표시 전환 |
+| `PgUp` / `PgDn` | 타임라인 페이지 이동 |
+| `Home` / `End` | 타임라인 처음·끝으로 이동 |
+| `Ctrl+C` | 즉시 종료 |
+>>>>>>> cef7a8c (update)

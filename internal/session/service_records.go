@@ -8,17 +8,50 @@ import (
 	"github.com/keonho-kim/orch/domain"
 )
 
-type Context struct {
-	Summary string
-	Records []domain.SessionRecord
+func (s *Service) Create(
+	workspacePath string,
+	provider domain.Provider,
+	model string,
+	startedAt time.Time,
+	parentSessionID string,
+	parentRunID string,
+	parentTaskID string,
+	workerRole domain.AgentRole,
+	taskTitle string,
+	taskContract string,
+	taskStatus string,
+) (domain.SessionMetadata, error) {
+	meta, err := s.manager.Create(
+		workspacePath,
+		provider,
+		model,
+		startedAt,
+		parentSessionID,
+		parentRunID,
+		parentTaskID,
+		workerRole,
+		taskTitle,
+		taskContract,
+		taskStatus,
+	)
+	if err != nil {
+		return domain.SessionMetadata{}, err
+	}
+	if err := s.syncMetadata(meta); err != nil {
+		return domain.SessionMetadata{}, err
+	}
+	return meta, nil
 }
 
-type Service struct {
-	manager *Manager
+func (s *Service) LoadMetadata(sessionID string) (domain.SessionMetadata, error) {
+	return s.manager.LoadMetadata(sessionID)
 }
 
-func NewService(manager *Manager) *Service {
-	return &Service{manager: manager}
+func (s *Service) SaveMetadata(meta domain.SessionMetadata) error {
+	if err := s.manager.SaveMetadata(meta); err != nil {
+		return err
+	}
+	return s.syncMetadata(meta)
 }
 
 func (s *Service) AppendContextSnapshot(meta domain.SessionMetadata, runID string, snapshot domain.ContextSnapshot) (domain.SessionMetadata, error) {
@@ -27,51 +60,6 @@ func (s *Service) AppendContextSnapshot(meta domain.SessionMetadata, runID strin
 		Type:            domain.SessionRecordContext,
 		ContextSnapshot: &snapshot,
 	})
-}
-
-func (s *Service) LatestContextSnapshot(sessionID string, runID string) (domain.ContextSnapshot, error) {
-	records, err := s.manager.LoadRecords(sessionID)
-	if err != nil {
-		return domain.ContextSnapshot{}, err
-	}
-	for index := len(records) - 1; index >= 0; index-- {
-		record := records[index]
-		if record.Type != domain.SessionRecordContext || record.ContextSnapshot == nil {
-			continue
-		}
-		if strings.TrimSpace(runID) != "" && record.RunID != runID {
-			continue
-		}
-		return *record.ContextSnapshot, nil
-	}
-	return domain.ContextSnapshot{}, fmt.Errorf("no context snapshot found")
-}
-
-func (s *Service) Context(meta domain.SessionMetadata) (Context, error) {
-	if strings.TrimSpace(meta.SessionID) == "" {
-		return Context{}, nil
-	}
-
-	records, err := s.manager.LoadRecords(meta.SessionID)
-	if err != nil {
-		return Context{}, err
-	}
-
-	contextRecords := make([]domain.SessionRecord, 0, len(records))
-	for _, record := range records {
-		if record.Seq <= meta.LastCompactedSeq {
-			continue
-		}
-		switch record.Type {
-		case domain.SessionRecordUser, domain.SessionRecordAssistant, domain.SessionRecordTool:
-			contextRecords = append(contextRecords, record)
-		}
-	}
-
-	return Context{
-		Summary: strings.TrimSpace(meta.Summary),
-		Records: contextRecords,
-	}, nil
 }
 
 func (s *Service) AppendUser(meta domain.SessionMetadata, runID string, prompt string) (domain.SessionMetadata, error) {
@@ -106,6 +94,20 @@ func (s *Service) AppendTool(meta domain.SessionMetadata, runID string, result d
 	})
 }
 
+func (s *Service) UpdateTitle(meta domain.SessionMetadata, title string) (domain.SessionMetadata, error) {
+	s.maintenanceMu.Lock()
+	defer s.maintenanceMu.Unlock()
+
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return meta, nil
+	}
+	return s.appendRecord(meta, domain.SessionRecord{
+		Type:  domain.SessionRecordTitle,
+		Title: title,
+	})
+}
+
 func (s *Service) appendRecord(meta domain.SessionMetadata, record domain.SessionRecord) (domain.SessionMetadata, error) {
 	meta.LastSequence++
 	record.Seq = meta.LastSequence
@@ -133,5 +135,29 @@ func (s *Service) appendRecord(meta domain.SessionMetadata, record domain.Sessio
 	if err := s.manager.SaveMetadata(meta); err != nil {
 		return meta, err
 	}
+	if err := s.syncMetadata(meta); err != nil {
+		return meta, err
+	}
+	if err := s.syncRecord(record); err != nil {
+		return meta, err
+	}
 	return meta, nil
+}
+
+func (s *Service) LatestContextSnapshot(sessionID string, runID string) (domain.ContextSnapshot, error) {
+	records, err := s.manager.LoadRecords(sessionID)
+	if err != nil {
+		return domain.ContextSnapshot{}, err
+	}
+	for index := len(records) - 1; index >= 0; index-- {
+		record := records[index]
+		if record.Type != domain.SessionRecordContext || record.ContextSnapshot == nil {
+			continue
+		}
+		if strings.TrimSpace(runID) != "" && record.RunID != runID {
+			continue
+		}
+		return *record.ContextSnapshot, nil
+	}
+	return domain.ContextSnapshot{}, fmt.Errorf("no context snapshot found")
 }

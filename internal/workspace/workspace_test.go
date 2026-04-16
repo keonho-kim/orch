@@ -69,7 +69,7 @@ func TestProvisionCopiesBootstrapFilesWithoutClaudeMirror(t *testing.T) {
 		}
 	}
 
-	provisioned, err := Provision(root, assets, []string{"PATH=/usr/bin"}, nil)
+	provisioned, err := Provision(root, assets, toolsRoot, []string{"PATH=/usr/bin"}, nil)
 	if err != nil {
 		t.Fatalf("provision workspace: %v", err)
 	}

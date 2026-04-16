@@ -1,5 +1,6 @@
 # 아키텍처
 
+<<<<<<< HEAD
 ## 패키지 책임
 
 - `internal/cli`: 엔트리포인트, 숨겨진 child-run 명령, TUI/exec/bootstrap 조합
@@ -73,3 +74,55 @@ flowchart TD
 - tooling은 도구 검증과 실행 정책만 다룹니다.
 - config는 CLI, API, TUI가 공유하는 동일 patch 규칙을 사용합니다.
 - provider 분기와 필수 설정 규칙은 registry에서만 정의합니다.
+=======
+## 설계 원칙
+
+- 전송 계층은 입출력과 진입점만 담당합니다.
+- 오케스트레이션 계층은 실행 흐름, 세션 전이, 승인 처리를 담당합니다.
+- 도메인 계층은 식별자, 상태 모델, 불변 조건을 담당합니다.
+- 어댑터 계층은 외부 제공자, 파일 시스템, 저장소, 렌더링과의 연결을 담당합니다.
+- 런타임 계층은 프로세스 실행, 환경 변수, 작업 디렉터리, 종료 처리를 담당합니다.
+
+## 패키지 책임
+
+| 패키지 | 책임 |
+| --- | --- |
+| `internal/cli` | `orch` 엔트리포인트, 명령 파싱, 실행 시작 |
+| `internal/tui` | 대화형 화면, 승인 UI, 세션 탐색, 설정 편집 |
+| `internal/apiserver` | 로컬 API 서버, 토큰 인증, SSE 스트림 |
+| `internal/orchestrator` | 실행 상태 전이, 역할별 흐름 제어, 작업 위임 |
+| `internal/tooling` | `ot` 호출, 승인 분류, 외부 명령 실행 |
+| `internal/session` | 세션 기록, 제목, compact, 작업 메타데이터 |
+| `internal/store/sqlite` | SQLite 접근, 실행 이력과 기억 저장 |
+| `internal/knowledge` | 기억 검색, 세션 회상, 스킬 승격 |
+| `internal/workspace` | 실행 워크스페이스 준비, 자산 복사, 환경 정리 |
+| `internal/adapters` | 제공자별 API 호출 |
+
+## 런타임 경계
+
+### 게이트웨이
+
+- 사용자 요청을 해석합니다.
+- 필요한 경우 워커 작업을 만듭니다.
+- 작업 결과를 모아 최종 응답을 만듭니다.
+
+### 워커
+
+- 위임된 작업 계약만 수행합니다.
+- 허용된 도구만 호출합니다.
+- 결과를 구조화된 형태로 남깁니다.
+
+### 저장소
+
+- 세션 기록은 JSONL과 메타데이터 파일로 보존됩니다.
+- 실행 메타데이터와 기억 관련 정보는 SQLite에도 함께 저장됩니다.
+
+## 디렉터리 기준
+
+- 전역 상태 루트: `ORCH_HOME`
+- 전역 설정 파일: `ORCH_HOME/orch.env.toml`
+- 프로젝트 설정 파일: `<repo>/orch.env.toml`
+- 워크스페이스 상태: `ORCH_HOME/workspaces/<workspace-id>/`
+
+세부 경로는 [실행 워크스페이스와 상태 디렉터리](./workspace-bootstrap.md)에서 설명합니다.
+>>>>>>> cef7a8c (update)

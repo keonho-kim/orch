@@ -337,8 +337,13 @@ func assertConfigEndpoints(t *testing.T, server *Server) {
 		t.Fatalf("decode config get response: %v", err)
 	}
 	_ = configGetResponse.Body.Close()
+<<<<<<< HEAD
 	if configBody.Config.Provider != "chatgpt" || configBody.Config.Providers.ChatGPT.Model != "gpt-4.1" {
 		t.Fatalf("unexpected config body: %+v", configBody)
+=======
+	if configBody.Entries["orch.default_provider"] != "chatgpt" || configBody.Entries["provider.chatgpt.model"] != "gpt-4.1" {
+		t.Fatalf("unexpected config entries: %+v", configBody.Entries)
+>>>>>>> cef7a8c (update)
 	}
 	if configBody.Config.Providers.ChatGPT.APIKey != "1234567890***vwxyz" {
 		t.Fatalf("expected redacted API key, got %+v", configBody.Config.Providers.ChatGPT)

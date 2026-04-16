@@ -11,7 +11,7 @@ type ProvisionedWorkspace struct {
 	Env  []string
 }
 
-func Provision(root string, bootstrapAssets string, baseEnv []string, allowedSecretEnv []string) (ProvisionedWorkspace, error) {
+func Provision(root string, bootstrapAssets string, toolsSource string, baseEnv []string, allowedSecretEnv []string) (ProvisionedWorkspace, error) {
 	bootstrapDir := filepath.Join(root, "bootstrap")
 	toolsDir := filepath.Join(root, "tools")
 	for _, path := range []string{root, bootstrapDir, toolsDir} {
@@ -20,8 +20,7 @@ func Provision(root string, bootstrapAssets string, baseEnv []string, allowedSec
 		}
 	}
 
-	repoRoot := filepath.Dir(filepath.Dir(bootstrapAssets))
-	if err := syncBootstrapFiles(root, bootstrapDir, toolsDir, bootstrapAssets, filepath.Join(repoRoot, "tools")); err != nil {
+	if err := syncBootstrapFiles(root, bootstrapDir, toolsDir, bootstrapAssets, toolsSource); err != nil {
 		return ProvisionedWorkspace{}, err
 	}
 

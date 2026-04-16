@@ -29,13 +29,13 @@ func TestPlatformDirRejectsUnsupportedTarget(t *testing.T) {
 func TestPrepareForPlatformExtractsHelpers(t *testing.T) {
 	t.Parallel()
 
-	configDir := t.TempDir()
-	prepared, err := prepareForPlatform("test-version", "linux", "amd64", configDir)
+	orchHome := t.TempDir()
+	prepared, err := prepareForPlatform("test-version", "linux", "amd64", orchHome)
 	if err != nil {
 		t.Fatalf("prepareForPlatform: %v", err)
 	}
 
-	if prepared.Dir != filepath.Join(configDir, "orch", "runtime", "bin", "test-version", "linux-amd64") {
+	if prepared.Dir != filepath.Join(orchHome, "runtime", "bin", "test-version", "linux-amd64") {
 		t.Fatalf("unexpected helper dir: %q", prepared.Dir)
 	}
 	assertExecutable(t, prepared.RGBin)
@@ -45,13 +45,13 @@ func TestPrepareForPlatformExtractsHelpers(t *testing.T) {
 func TestPrepareForPlatformUsesDevVersionFallback(t *testing.T) {
 	t.Parallel()
 
-	configDir := t.TempDir()
-	prepared, err := prepareForPlatform("", "linux", "arm64", configDir)
+	orchHome := t.TempDir()
+	prepared, err := prepareForPlatform("", "linux", "arm64", orchHome)
 	if err != nil {
 		t.Fatalf("prepareForPlatform: %v", err)
 	}
 
-	if prepared.Dir != filepath.Join(configDir, "orch", "runtime", "bin", "dev", "linux-arm64") {
+	if prepared.Dir != filepath.Join(orchHome, "runtime", "bin", "dev", "linux-arm64") {
 		t.Fatalf("unexpected helper dir: %q", prepared.Dir)
 	}
 }
